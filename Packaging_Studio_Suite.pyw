@@ -221,6 +221,7 @@ DEFAULT_CONFIG = {
     "theme": "dark",
     "auto_create_blend": True,
     "auto_open_blender": True,
+    "auto_open_ai": True,
     "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
     "auto_append_to_excel": True,
     "folder_rules": DEFAULT_FOLDER_RULES,
@@ -1065,6 +1066,7 @@ class PackagingStudioSuite:
         self.current_cat_var = tk.StringVar(value=self.cfg.get("default_category", "包装"))
         self.auto_create_blend_var = tk.BooleanVar(value=self.cfg.get("auto_create_blend", True))
         self.auto_open_blender_var = tk.BooleanVar(value=self.cfg.get("auto_open_blender", True))
+        self.auto_open_ai_var = tk.BooleanVar(value=self.cfg.get("auto_open_ai", True))
         self.auto_append_excel_var = tk.BooleanVar(value=self.cfg.get("auto_append_to_excel", True))
         self.files_to_organize = []
         
@@ -1432,13 +1434,15 @@ class PackagingStudioSuite:
         ttk.Button(row_brand, text="⚙️ 自定义规则...", command=self.open_rule_manager).pack(side=tk.LEFT)
 
         # 2. 自动化存盘与同步选项
-        b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与 Excel 双向同步设置 ", padding=8)
+        b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与开工设置 ", padding=8)
         b_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
         row_b = ttk.Frame(b_frame)
         row_b.pack(fill=tk.X)
-        ttk.Checkbutton(row_b, text="✨ 自动生成对应 .blend 工程", variable=self.auto_create_blend_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(row_b, text="🚀 自动启动 Blender 打开工程", variable=self.auto_open_blender_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(row_b, text="📊 归档时自动录入《产品列表.xlsx》", variable=self.auto_append_excel_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(row_b, text="🎨 自动打开 AI 设计原稿", variable=self.auto_open_ai_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Checkbutton(row_b, text="✨ 自动生成对应 .blend 工程", variable=self.auto_create_blend_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Checkbutton(row_b, text="🚀 自动启动 Blender", variable=self.auto_open_blender_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Checkbutton(row_b, text="📊 自动录入 Excel", variable=self.auto_append_excel_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(row_b, text="🎨 一键安装 AI 贴图脚本", command=self.install_ai_jsx_script).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(row_b, text="📁 设置母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
 
         # 3. 待处理列表
@@ -1536,12 +1540,58 @@ class PackagingStudioSuite:
         return rel
 
     # ---------------- 逻辑与事件处理 ----------------
+    def install_ai_jsx_script(self):
+        src_jsx = os.path.join(os.path.dirname(__file__), "Export_Artboards_To_Textures.jsx")
+        if not os.path.exists(src_jsx):
+            src_jsx = r"C:\Users\qq424\Packaging_Tools\Export_Artboards_To_Textures.jsx"
+            
+        if not os.path.exists(src_jsx):
+            messagebox.showerror("错误", "未找到脚本源文件: Export_Artboards_To_Textures.jsx")
+            return
+            
+        target_dirs = []
+        possible_roots = [
+            r"H:\adobe\Adobe Illustrator 2024",
+            r"C:\Program Files\Adobe\Adobe Illustrator 2024",
+            r"C:\Program Files\Adobe\Adobe Illustrator 2025",
+            r"D:\Adobe\Adobe Illustrator 2024"
+        ]
+        for pr in possible_roots:
+            p_zh = os.path.join(pr, "Presets", "zh_CN", "脚本")
+            if os.path.exists(p_zh):
+                target_dirs.append(p_zh)
+            p_en = os.path.join(pr, "Presets", "en_US", "Scripts")
+            if os.path.exists(p_en):
+                target_dirs.append(p_en)
+                
+        installed = []
+        for td in target_dirs:
+            try:
+                dest = os.path.join(td, "🚀一键导出画板到贴图目录.jsx")
+                shutil.copy2(src_jsx, dest)
+                installed.append(dest)
+            except Exception:
+                pass
+                
+        if installed:
+            messagebox.showinfo("安装成功", f"🎉 已成功将贴图导出脚本注入 Illustrator！\n\n已安装到:\n{installed[0]}\n\n使用方式:\n在 Illustrator 中点击顶部菜单：\n【文件】➔【脚本】➔【🚀一键导出画板到贴图目录】即可一键秒出图！")
+        else:
+            # 如果自动寻找路径失败，让用户手动选择
+            dest_dir = filedialog.askdirectory(title="选择 Illustrator 的 Presets/zh_CN/脚本 目录")
+            if dest_dir:
+                try:
+                    shutil.copy2(src_jsx, os.path.join(dest_dir, "🚀一键导出画板到贴图目录.jsx"))
+                    messagebox.showinfo("安装成功", "🎉 已成功安装到指定的脚本目录！")
+                except Exception as e:
+                    messagebox.showerror("安装失败", str(e))
+
     def save_cfg_all(self):
         self.cfg["current_workspace"] = self.current_workspace_var.get()
         self.cfg["current_brand"] = self.current_brand_var.get()
         self.cfg["default_category"] = self.current_cat_var.get()
         self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
         self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
+        self.cfg["auto_open_ai"] = self.auto_open_ai_var.get()
         self.cfg["auto_append_to_excel"] = self.auto_append_excel_var.get()
         self.cfg["folder_rules"] = self.folder_rules
         self.cfg["active_rule_id"] = self.active_rule_id
@@ -1706,6 +1756,7 @@ class PackagingStudioSuite:
             
         auto_create_blend = self.auto_create_blend_var.get()
         auto_open_blender = self.auto_open_blender_var.get()
+        auto_open_ai = self.auto_open_ai_var.get()
         auto_append_excel = self.auto_append_excel_var.get()
         excel_path = self.excel_path_var.get().strip()
         
@@ -1713,6 +1764,7 @@ class PackagingStudioSuite:
         duplicate_count = 0
         excel_appended_count = 0
         last_blend = ""
+        last_ai = ""
         last_proj = ""
         
         for item in self.files_to_organize:
@@ -1744,10 +1796,13 @@ class PackagingStudioSuite:
                 continue
                 
             dest_name = f"{sku}_v{len(existing_files)+1:02d}{ext}"
+            dest_full_ai = os.path.join(design_dir, dest_name)
             try:
-                shutil.copy2(item["filepath"], os.path.join(design_dir, dest_name))
+                shutil.copy2(item["filepath"], dest_full_ai)
                 success_count += 1
                 last_proj = proj_dir
+                if ext.lower() in [".ai", ".psd", ".pdf", ".eps"]:
+                    last_ai = dest_full_ai
             except Exception as e:
                 print(f"Error copying: {e}")
                 
@@ -1776,13 +1831,22 @@ class PackagingStudioSuite:
         if duplicate_count > 0:
             msg.append(f"ℹ️ 自动跳过 {duplicate_count} 个重复接收文件。")
             
+        # 顺势拉起 AI 源文件
+        if auto_open_ai and last_ai and os.path.exists(last_ai):
+            try:
+                os.startfile(last_ai)
+                msg.append(f"🎨 已顺势打开 AI 设计原稿: [{os.path.basename(last_ai)}]")
+            except Exception as e:
+                print(f"Error opening AI: {e}")
+                
+        # 顺势启动 Blender
         if auto_open_blender and last_blend and os.path.exists(last_blend):
             try:
                 subprocess.Popen([BLENDER_EXE, last_blend])
                 msg.append(f"🚀 已自动启动 Blender 打开工程: [{os.path.basename(last_blend)}]")
             except Exception:
                 os.startfile(last_blend)
-        elif last_proj and os.path.exists(last_proj):
+        elif not auto_open_ai and last_proj and os.path.exists(last_proj):
             try:
                 os.startfile(last_proj)
             except Exception:
