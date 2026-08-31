@@ -1,0 +1,15 @@
+# Blender
+*.blend1
+*.blend2
+*.bphys
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store
+*.tmp
+
+# Output Renders
+/Renders/
+/Textures/

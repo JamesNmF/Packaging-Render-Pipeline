@@ -1,0 +1,12 @@
+schema_version = "1.0.0"
+id = "packaging_render_pipeline"
+version = "1.0.0"
+name = "包装渲染与多通道自动输出助手"
+tagline = "专为包装渲染定制：贴图点选替换、自动多通道合成设置、一键渲染并自动输出全套通道图"
+maintainer = "Antigravity Pipeline"
+type = "add-on"
+tags = ["Render"]
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:GPL-2.0-or-later",
+]
