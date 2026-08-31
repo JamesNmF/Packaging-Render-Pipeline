@@ -636,11 +636,36 @@ class PackagingStudioSuite:
         self.load_all_asset_data()
         self.start_excel_auto_sync_watcher()
         
+        # 加载专属软件图标
+        self.load_app_icon()
+        
         if initial_files:
             self.notebook.select(1)
             self.add_files_to_organizer(initial_files)
         else:
             self.notebook.select(0)
+
+    def load_app_icon(self):
+        icon_ico = os.path.join(os.path.dirname(__file__), "app_icon.ico")
+        icon_png = os.path.join(os.path.dirname(__file__), "app_icon.png")
+        if not os.path.exists(icon_ico):
+            icon_ico = r"C:\Users\qq424\Packaging_Tools\app_icon.ico"
+        if not os.path.exists(icon_png):
+            icon_png = r"C:\Users\qq424\Packaging_Tools\app_icon.png"
+            
+        if os.path.exists(icon_ico):
+            try:
+                self.root.iconbitmap(icon_ico)
+            except Exception:
+                pass
+        if os.path.exists(icon_png):
+            try:
+                img = Image.open(icon_png)
+                photo = ImageTk.PhotoImage(img)
+                self.root.iconphoto(True, photo)
+                self._app_icon_ref = photo
+            except Exception:
+                pass
 
     def setup_styles(self):
         c = self.colors
