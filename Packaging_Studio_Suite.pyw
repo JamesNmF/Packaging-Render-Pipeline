@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与视觉资产综合中枢 (Packaging Studio Suite - v1.0 正式版)
+美术资产中枢 (Art Asset Hub - v1.0 正式版)
 ===================================================================
 【核心功能体系】：
 1. 🖼️ 视觉资产看板 (Visual Asset Hub)：
@@ -1037,7 +1037,7 @@ class FolderRuleManagerDialog(tk.Toplevel):
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v1.0 正式版)")
+        self.root.title("美术资产中枢 - Art Asset Hub (v1.0 正式版)")
         self.root.geometry("1260x830")
         self.root.minsize(1020, 660)
         
@@ -2128,7 +2128,7 @@ class PackagingStudioSuite:
 
     def export_html_gallery(self):
         cur_ws = self.current_workspace_var.get().strip()
-        html_file = os.path.join(cur_ws if os.path.exists(cur_ws) else os.path.expanduser("~"), "📦_设计项目全景视觉画廊.html")
+        html_file = os.path.join(cur_ws if os.path.exists(cur_ws) else os.path.expanduser("~"), "🎨_美术资产全景视觉画廊.html")
         cards_html = []
         for p in self.current_display_list:
             thumb_rel = p.get("thumbnail") or ""
@@ -2149,7 +2149,7 @@ class PackagingStudioSuite:
                 </div>
             </div>
             """)
-        full_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>📦 设计项目全景视觉画廊</title>
+        full_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>🎨 美术资产全景视觉画廊</title>
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #222429; color: #e2e4e8; margin: 0; padding: 24px; }}
 h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 24px; color: #e2e4e8; }}
@@ -2162,7 +2162,7 @@ h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 24px; color: #e2e4e8; }}
 .badge {{ display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; }}
 .title {{ font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: #e2e4e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .path {{ font-size: 11px; color: #9699a2; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-</style></head><body><h1>📦 设计项目全景视觉画廊 (共 {len(self.current_display_list)} 个项目)</h1><div class="grid">{"".join(cards_html)}</div></body></html>"""
+</style></head><body><h1>🎨 美术资产全景视觉画廊 (共 {len(self.current_display_list)} 个项目)</h1><div class="grid">{"".join(cards_html)}</div></body></html>"""
         try:
             with open(html_file, "w", encoding="utf-8") as f:
                 f.write(full_html)
