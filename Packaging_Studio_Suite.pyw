@@ -1,18 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与视觉资产综合中枢 (Packaging Studio Suite - v6.0 极限瞬切性能旗舰版)
-重大性能与架构升级：
-1. 【零延迟瞬切架构 (Instant Category Switch)】：
-   - 磁盘持久化缩略图池：高清 4K 原图只在初次或后台异步压制为 200x200 (15KB) 微缩图，后续直接毫秒级秒读！
-   - 固定 30 卡片槽位复用池 (Widget Pool)：分类切换时 0 控件销毁、0 从零重建，仅原地更新图文，切换分类 < 5ms！
-   - 搜索输入防抖 (Debounce 200ms)：输入打字如飞，绝不卡滞。
-
-2. 【四大核心业务分类 & Beauty 封面】：
-   - 📦 包装 (100% 默认兜底) / 🎁 套盒 / 🖼️ 海报 / 📑 物料；
-   - 3 处灵活手动修改 (顶部批量 / 单行双击 / 看板右键即时同步 Excel)；
-   - 渲染出的最新 Beauty.png 毫秒级自动成为封面。
-
-3. 【高级暗黑美学 (Studio Dark Mode) ＆ 专属猫咪头像图标】。
+包装设计与视觉资产综合中枢 (Packaging Studio Suite - v6.5 温润工业石墨灰护眼版)
+重点重构：
+1. 【温润工业暗灰设计 (Studio Graphite Warm Dark)】：
+   - 彻底废除刺眼的纯黑/高反差死黑，全面升级为类似 Blender / Lightroom / Eagle 的工业级温润石墨灰调 (#24262B ~ #32353B)；
+   - 柔和防眩光设计：文字采用护眼米白 (#E2E4E8)，低饱和度雅致色彩徽标，输入框全面暗化，与白色渲染图自然融合，长时间使用眼睛极度舒适。
+2. 【零延迟瞬切架构 (Instant Turbo)】：
+   - 磁盘持久化缩略图池 (15KB JPEG) + 30 卡片槽位复用池 (Widget Pool)，切换分类 < 5ms。
+3. 【四大核心业务分类 & Beauty 封面】：
+   - 📦 包装 (100% 默认兜底) / 🎁 套盒 / 🖼️ 海报 / 📑 物料。
 """
 
 import os
@@ -75,45 +71,52 @@ SYSTEM_IGNORED_DIRS = {
 
 VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
 
+# 温润工业级调色板 (告别刺眼死黑与荧光蓝)
 THEMES = {
     "dark": {
-        "bg": "#0B0F19",
-        "header_bg": "#111827",
-        "sidebar_bg": "#111827",
-        "panel_bg": "#1E293B",
-        "card_bg": "#1E293B",
-        "card_border": "#334155",
-        "card_hover": "#38BDF8",
-        "canvas_bg": "#0B0F19",
-        "fg": "#F8FAFC",
-        "fg_muted": "#94A3B8",
-        "fg_dim": "#64748B",
-        "primary": "#0284C7",
-        "primary_hover": "#0369A1",
+        "bg": "#222429",               # 柔和深石墨底色
+        "header_bg": "#2A2C32",        # 顶栏底色
+        "sidebar_bg": "#2A2C32",       # 侧边栏底色
+        "panel_bg": "#2A2C32",         # 面板底色
+        "card_bg": "#30333A",          # 卡片微凸底色
+        "card_border": "#3D414A",      # 极细低反差边框
+        "card_hover": "#4C84C4",       # 悬浮高亮色
+        "canvas_bg": "#222429",        # 视口画布底色
+        "thumb_bg": "#27292F",         # 渲染图背景托底色
+        "input_bg": "#1A1B1F",         # 搜索框/下拉框暗色背景
+        "input_fg": "#E2E4E8",         # 输入文字颜色
+        "fg": "#E2E4E8",               # 主文字：温润米白 (防刺眼)
+        "fg_muted": "#9699A2",         # 次级文字：低对比银灰
+        "fg_dim": "#656872",           # 弱化文字
+        "primary": "#3B78B8",          # 雅致靛蓝
+        "primary_hover": "#4989CE",
         "primary_fg": "#FFFFFF",
-        "badge_brand_bg": "#334155",
-        "badge_brand_fg": "#CBD5E1",
+        "badge_brand_bg": "#3A3D46",   # 品牌微标底色
+        "badge_brand_fg": "#B2B6BE",
         "cat_colors": {
-            "包装": ("#1E3A8A", "#93C5FD"),
-            "套盒": ("#78350F", "#FDE68A"),
-            "海报": ("#581C87", "#E9D5FF"),
-            "物料": ("#064E3B", "#A7F3D0")
+            "包装": ("#26384C", "#96C2EC"),
+            "套盒": ("#443522", "#E8C88A"),
+            "海报": ("#382845", "#D2A2E8"),
+            "物料": ("#223D32", "#8EE2BE")
         },
-        "btn_secondary_bg": "#334155",
-        "btn_secondary_fg": "#E2E8F0",
-        "status_bg": "#064E3B",
-        "status_fg": "#34D399"
+        "btn_secondary_bg": "#3A3D46",
+        "btn_secondary_fg": "#D2D5DA",
+        "status_bg": "#1D3328",
+        "status_fg": "#6EE7B7"
     },
     "light": {
-        "bg": "#F1F5F9",
+        "bg": "#F4F6F9",
         "header_bg": "#FFFFFF",
         "sidebar_bg": "#FFFFFF",
         "panel_bg": "#FFFFFF",
         "card_bg": "#FFFFFF",
-        "card_border": "#E2E8F0",
+        "card_border": "#E2E6EC",
         "card_hover": "#0284C7",
-        "canvas_bg": "#F8FAFC",
-        "fg": "#0F172A",
+        "canvas_bg": "#F4F6F9",
+        "thumb_bg": "#F8FAFC",
+        "input_bg": "#FFFFFF",
+        "input_fg": "#0F172A",
+        "fg": "#1E293B",
         "fg_muted": "#64748B",
         "fg_dim": "#94A3B8",
         "primary": "#0078D7",
@@ -187,10 +190,6 @@ def save_meta_cache(cache):
 
 
 def get_fast_disk_thumbnail_path(orig_img_path, size=(190, 190)):
-    """
-    【磁盘持久化缩略图池】：
-    为原始高清大图生成轻量级 200x200 JPEG 磁盘缓存，下次直接毫秒级读取，耗时降为 0.1ms！
-    """
     if not orig_img_path or not os.path.exists(orig_img_path):
         return None
     try:
@@ -201,7 +200,6 @@ def get_fast_disk_thumbnail_path(orig_img_path, size=(190, 190)):
         if os.path.exists(cached_thumb_file):
             return cached_thumb_file
             
-        # 首次生成并保存到磁盘
         im = Image.open(orig_img_path)
         if im.mode != "RGB":
             im = im.convert("RGB")
@@ -619,7 +617,7 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v6.0 Turbo)")
+        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v6.5 温润灰调版)")
         self.root.geometry("1240x820")
         self.root.minsize(1020, 660)
         
@@ -659,13 +657,10 @@ class PackagingStudioSuite:
         self.current_display_list = []
         self.filtered_projects = []
         
-        # 性能核心：缩略图对象缓存 + 30 个常驻卡片槽位复用池
         self.thumb_tk_cache = {}
         self.card_slots = []
         
-        # 加载专属软件图标
         self.load_app_icon()
-        
         self.setup_styles()
         self.build_ui()
         self.init_card_slots(30)
@@ -705,26 +700,33 @@ class PackagingStudioSuite:
             
         style.configure(".", background=c["bg"], foreground=c["fg"], font=("Microsoft YaHei", 9))
         style.configure("TNotebook", background=c["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 10, "bold"), padding=[20, 8], borderwidth=0)
+        style.configure("TNotebook.Tab", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 10), padding=[20, 7], borderwidth=0)
         style.map("TNotebook.Tab",
                   background=[("selected", c["primary"])],
                   foreground=[("selected", c["primary_fg"])])
                   
         style.configure("TFrame", background=c["bg"])
-        style.configure("TLabelframe", background=c["bg"], foreground=c["fg"])
-        style.configure("TLabelframe.Label", background=c["bg"], foreground=c["primary_hover"] if self.current_theme == "light" else "#38BDF8", font=("Microsoft YaHei", 9, "bold"))
+        style.configure("TLabelframe", background=c["bg"], foreground=c["fg"], bordercolor=c["card_border"])
+        style.configure("TLabelframe.Label", background=c["bg"], foreground=c["primary_hover"], font=("Microsoft YaHei", 9, "bold"))
         
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
-        style.configure("TButton", background=c["btn_secondary_bg"], foreground=c["btn_secondary_fg"], font=("Microsoft YaHei", 9), padding=[8, 4], borderwidth=1)
+        
+        # 按钮样式（温和不刺眼）
+        style.configure("TButton", background=c["btn_secondary_bg"], foreground=c["btn_secondary_fg"], font=("Microsoft YaHei", 9), padding=[8, 4], borderwidth=0)
         style.map("TButton",
-                  background=[("active", c["primary"])],
-                  foreground=[("active", "#FFFFFF")])
+                  background=[("active", c["primary"]), ("pressed", c["primary"])],
+                  foreground=[("active", "#FFFFFF"), ("pressed", "#FFFFFF")])
                   
-        style.configure("Primary.TButton", background=c["primary"], foreground="#FFFFFF", font=("Microsoft YaHei", 9, "bold"), padding=[10, 5])
+        style.configure("Primary.TButton", background=c["primary"], foreground="#FFFFFF", font=("Microsoft YaHei", 9, "bold"), padding=[10, 5], borderwidth=0)
         style.map("Primary.TButton", background=[("active", c["primary_hover"])])
         
-        style.configure("Treeview", background=c["panel_bg"], foreground=c["fg"], fieldbackground=c["panel_bg"], rowheight=26, font=("Microsoft YaHei", 9))
-        style.configure("Treeview.Heading", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 9, "bold"))
+        # 搜索输入框与下拉框样式（深色温和）
+        style.configure("TEntry", fieldbackground=c["input_bg"], foreground=c["input_fg"], insertcolor=c["fg"], bordercolor=c["card_border"])
+        style.configure("TCombobox", fieldbackground=c["input_bg"], background=c["btn_secondary_bg"], foreground=c["input_fg"], bordercolor=c["card_border"], arrowcolor=c["fg_muted"])
+        style.map("TCombobox", fieldbackground=[("readonly", c["input_bg"])], foreground=[("readonly", c["input_fg"])])
+
+        style.configure("Treeview", background=c["panel_bg"], foreground=c["fg"], fieldbackground=c["panel_bg"], rowheight=26, font=("Microsoft YaHei", 9), borderwidth=0)
+        style.configure("Treeview.Heading", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 9, "bold"), borderwidth=1, relief=tk.FLAT)
         style.map("Treeview", background=[("selected", c["primary"])], foreground=[("selected", "#FFFFFF")])
 
     def toggle_theme(self):
@@ -735,7 +737,7 @@ class PackagingStudioSuite:
         save_config(self.cfg)
         
         self.setup_styles()
-        self.theme_btn.config(text="☀️ 切换为浅色" if new_theme == "dark" else "🌙 切换为暗黑")
+        self.theme_btn.config(text="☀️ 浅色模式" if new_theme == "dark" else "🌙 护眼暗灰")
         self.restyle_all_ui()
         self.thumb_tk_cache.clear()
         self.render_cards()
@@ -748,10 +750,9 @@ class PackagingStudioSuite:
         self.category_listbox.configure(bg=c["panel_bg"], fg=c["fg"], selectbackground=c["primary"])
         self.sync_status_lbl.configure(bg=c["status_bg"], fg=c["status_fg"])
         
-        # 刷新槽位底色
         for slot in self.card_slots:
             slot["card"].configure(bg=c["card_bg"], highlightbackground=c["card_border"])
-            slot["img_lbl"].configure(bg=c["card_bg"])
+            slot["img_lbl"].configure(bg=c["thumb_bg"])
             slot["meta_frame"].configure(bg=c["card_bg"])
             slot["badge_row"].configure(bg=c["card_bg"])
             slot["title_lbl"].configure(bg=c["card_bg"], fg=c["fg"])
@@ -779,7 +780,7 @@ class PackagingStudioSuite:
     def build_asset_hub_ui(self, parent):
         c = self.colors
         
-        top_bar = ttk.Frame(parent, padding=(16, 12))
+        top_bar = ttk.Frame(parent, padding=(16, 10))
         top_bar.pack(fill=tk.X)
         
         ttk.Label(top_bar, text="📊 视图:").pack(side=tk.LEFT, padx=(0, 4))
@@ -804,7 +805,7 @@ class PackagingStudioSuite:
         
         self.sync_status_lbl = tk.Label(
             top_bar,
-            text="🟢 极速瞬切性能引擎已就绪",
+            text="🟢 极速同步已就绪",
             font=("Microsoft YaHei", 8, "bold"),
             fg=c["status_fg"],
             bg=c["status_bg"],
@@ -813,7 +814,7 @@ class PackagingStudioSuite:
         )
         self.sync_status_lbl.pack(side=tk.LEFT, padx=(6, 0))
         
-        self.theme_btn = ttk.Button(top_bar, text="☀️ 切换为浅色" if self.current_theme == "dark" else "🌙 切换为暗黑", command=self.toggle_theme)
+        self.theme_btn = ttk.Button(top_bar, text="☀️ 浅色模式" if self.current_theme == "dark" else "🌙 护眼暗灰", command=self.toggle_theme)
         self.theme_btn.pack(side=tk.RIGHT, padx=(8, 0))
         
         ttk.Button(top_bar, text="🌐 导出全景画廊 (HTML)", command=self.export_html_gallery).pack(side=tk.RIGHT)
@@ -873,21 +874,21 @@ class PackagingStudioSuite:
 
     # ---------------- 卡片槽位复用池 (Widget Pool) ----------------
     def init_card_slots(self, count=30):
-        """预先创建 30 个卡片槽位，消除反复销毁和新建的卡顿"""
         c = self.colors
         for i in range(count):
             card = tk.Frame(
                 self.grid_container,
                 bg=c["card_bg"],
-                bd=1,
-                relief=tk.SOLID,
+                bd=0,
                 padx=8,
                 pady=8,
                 highlightthickness=1,
                 highlightbackground=c["card_border"]
             )
-            img_lbl = tk.Label(card, bg=c["card_bg"], cursor="hand2")
-            img_lbl.pack(fill=tk.BOTH, expand=True)
+            
+            # 渲染图带柔和底框，防止白色渲染图突兀刺眼
+            img_lbl = tk.Label(card, bg=c["thumb_bg"], cursor="hand2")
+            img_lbl.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
             
             meta_frame = tk.Frame(card, bg=c["card_bg"], pady=4)
             meta_frame.pack(fill=tk.X)
@@ -907,10 +908,10 @@ class PackagingStudioSuite:
             action_frame = tk.Frame(card, bg=c["card_bg"], pady=4)
             action_frame.pack(fill=tk.X)
             
-            btn_open = tk.Button(action_frame, text="📁 文件夹", font=("Microsoft YaHei", 8), relief=tk.FLAT)
+            btn_open = tk.Button(action_frame, text="📁 文件夹", font=("Microsoft YaHei", 8), bg=c["btn_secondary_bg"], fg=c["btn_secondary_fg"], relief=tk.FLAT, bd=0)
             btn_open.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
             
-            btn_blend = tk.Button(action_frame, text="🚀 3D工程", font=("Microsoft YaHei", 8, "bold"), bg=c["primary"], fg="#FFFFFF", relief=tk.FLAT)
+            btn_blend = tk.Button(action_frame, text="🚀 3D工程", font=("Microsoft YaHei", 8, "bold"), bg=c["primary"], fg="#FFFFFF", relief=tk.FLAT, bd=0)
             btn_blend.pack(side=tk.RIGHT)
             
             slot = {
@@ -1032,6 +1033,7 @@ class PackagingStudioSuite:
             activeforeground="#FFFFFF",
             relief=tk.FLAT,
             height=2,
+            bd=0,
             command=self.execute_organize_flow
         )
         btn_exec.pack(fill=tk.X)
@@ -1149,6 +1151,7 @@ class PackagingStudioSuite:
         edit_win = tk.Toplevel(self.root)
         edit_win.title("✏️ 快速修改客户、分类与项目名")
         edit_win.geometry("430x290")
+        edit_win.configure(bg=self.colors["bg"])
         edit_win.transient(self.root)
         edit_win.grab_set()
         
@@ -1291,7 +1294,7 @@ class PackagingStudioSuite:
                     self.thumb_tk_cache.clear()
                     self.load_all_asset_data()
                     self.sync_status_lbl.config(text="⚡ Excel 已更新，已自动同步！", bg="#FEF3C7", fg="#B45309")
-                    self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速瞬切性能引擎已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+                    self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
                 elif self.last_excel_mtime == 0:
                     self.last_excel_mtime = current_mtime
             except Exception:
@@ -1443,7 +1446,6 @@ class PackagingStudioSuite:
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def get_scaled_thumbnail(self, img_path, size=(190, 190)):
-        """极速缩略图获取：直接命中 15KB JPEG 磁盘缓存，耗时仅 0.1ms"""
         if not img_path or not os.path.exists(img_path):
             return self.get_placeholder_thumbnail(size)
             
@@ -1467,8 +1469,9 @@ class PackagingStudioSuite:
         cache_key = f"placeholder_{self.current_theme}"
         if cache_key in self.thumb_tk_cache:
             return self.thumb_tk_cache[cache_key]
-        bg_c = (20, 28, 44, 255) if self.current_theme == "dark" else (241, 245, 249, 255)
-        fg_c = (100, 116, 139, 255) if self.current_theme == "dark" else (148, 163, 184, 255)
+        c = self.colors
+        bg_c = (39, 41, 47, 255) if self.current_theme == "dark" else (244, 246, 249, 255)
+        fg_c = (110, 114, 122, 255) if self.current_theme == "dark" else (148, 163, 184, 255)
         im = Image.new("RGBA", size, bg_c)
         draw = ImageDraw.Draw(im)
         draw.text((size[0]//2 - 40, size[1]//2 - 10), "📦 待渲染工程", fill=fg_c)
@@ -1477,10 +1480,6 @@ class PackagingStudioSuite:
         return tk_img
 
     def render_cards(self):
-        """
-        【极致性能渲染：卡片槽位复用 (Widget Pool)】
-        不执行任何 destroy()，仅复用 30 个预设槽位并原地更新，切换分类 < 5ms！
-        """
         c = self.colors
         container_width = self.canvas.winfo_width()
         if container_width < 100:
@@ -1493,7 +1492,6 @@ class PackagingStudioSuite:
         page_items = self.filtered_projects[start_idx:end_idx]
         total_page_items = len(page_items)
 
-        # 更新槽位数据
         for idx in range(len(self.card_slots)):
             slot = self.card_slots[idx]
             if idx < total_page_items:
@@ -1502,20 +1500,16 @@ class PackagingStudioSuite:
                 row = idx // cols
                 col = idx % cols
                 
-                # 重新定位网格
                 slot["card"].grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
                 
-                # 刷新图片
                 tk_thumb = self.get_scaled_thumbnail(proj["thumbnail"])
                 slot["img_lbl"].config(image=tk_thumb)
                 slot["img_lbl"].image = tk_thumb
                 
-                # 刷新形态徽标
                 cat_val = normalize_category(proj.get("cat", "包装"))
-                bg_c, fg_c = c["cat_colors"].get(cat_val, ("#1E3A8A", "#93C5FD"))
+                bg_c, fg_c = c["cat_colors"].get(cat_val, ("#26384C", "#96C2EC"))
                 slot["cat_tag"].config(text=cat_val, bg=bg_c, fg=fg_c)
                 
-                # 刷新品牌徽标
                 b_name = proj.get("brand", "")
                 if b_name:
                     slot["brand_tag"].config(text=b_name, bg=c["badge_brand_bg"], fg=c["badge_brand_fg"])
@@ -1523,10 +1517,8 @@ class PackagingStudioSuite:
                 else:
                     slot["brand_tag"].pack_forget()
                     
-                # 刷新标题
                 slot["title_lbl"].config(text=proj["sku"])
                 
-                # 绑定按钮事件
                 has_path = bool(proj.get("path") and os.path.exists(proj["path"]))
                 p = proj.get("path")
                 slot["btn_open"].config(
@@ -1536,13 +1528,11 @@ class PackagingStudioSuite:
                 )
                 slot["btn_blend"].config(command=lambda p_path=p: self.launch_blend(p_path))
                 
-                # 绑定交互事件
                 for w in (slot["card"], slot["img_lbl"], slot["title_lbl"], slot["meta_frame"]):
                     w.bind("<Button-1>", lambda e, p_path=p: self.open_folder(p_path))
                     w.bind("<Double-1>", lambda e, p_path=p: self.launch_blend(p_path))
                     w.bind("<Button-3>", lambda e, pr=proj: self.show_context_menu(e, pr))
             else:
-                # 隐藏多余的槽位
                 slot["active_proj"] = None
                 slot["card"].grid_remove()
 
@@ -1611,8 +1601,8 @@ class PackagingStudioSuite:
                 save_meta_cache(self.meta_cache)
                 
         self.update_active_dataset()
-        self.sync_status_lbl.config(text=f"✅ [{proj['sku']}] 已更新为 【{new_cat}】！", bg="#064E3B", fg="#34D399")
-        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速瞬切性能引擎已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+        self.sync_status_lbl.config(text=f"✅ [{proj['sku']}] 已更新为 【{new_cat}】！", bg="#1D3328", fg="#6EE7B7")
+        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
 
     def copy_path_to_clipboard(self, text):
         self.root.clipboard_clear()
@@ -1634,8 +1624,8 @@ class PackagingStudioSuite:
                 <div class="thumb-container"><img src="{thumb_src}" alt="{p['sku']}" loading="lazy"></div>
                 <div class="meta">
                     <div style="display:flex; gap:6px; margin-bottom:6px;">
-                        <span class="badge" style="background:#0369a1;">{cat_name}</span>
-                        <span class="badge" style="background:#334155;">{p.get('brand', '')}</span>
+                        <span class="badge" style="background:#26384C; color:#96C2EC;">{cat_name}</span>
+                        <span class="badge" style="background:#3A3D46; color:#B2B6BE;">{p.get('brand', '')}</span>
                     </div>
                     <h3 class="title">{p['sku']}</h3>
                     <p class="path">{p.get('path', '')}</p>
@@ -1644,17 +1634,17 @@ class PackagingStudioSuite:
             """)
         full_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>📦 设计项目全景视觉画廊</title>
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #0b0f19; color: #f8fafc; margin: 0; padding: 24px; }}
-h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 24px; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #222429; color: #e2e4e8; margin: 0; padding: 24px; }}
+h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 24px; color: #e2e4e8; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; }}
-.card {{ background: #1e293b; border-radius: 12px; overflow: hidden; border: 1px solid #334155; cursor: pointer; transition: transform 0.2s, border-color 0.2s; }}
-.card:hover {{ transform: translateY(-4px); border-color: #38bdf8; box-shadow: 0 12px 24px -10px rgba(0,0,0,0.5); }}
-.thumb-container {{ width: 100%; aspect-ratio: 1; background: #0f172a; display: flex; align-items: center; justify-content: center; }}
+.card {{ background: #30333A; border-radius: 10px; overflow: hidden; border: 1px solid #3d414a; cursor: pointer; transition: transform 0.2s, border-color 0.2s; }}
+.card:hover {{ transform: translateY(-4px); border-color: #4c84c4; box-shadow: 0 12px 24px -10px rgba(0,0,0,0.5); }}
+.thumb-container {{ width: 100%; aspect-ratio: 1; background: #27292f; display: flex; align-items: center; justify-content: center; }}
 .thumb-container img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
 .meta {{ padding: 12px; }}
-.badge {{ display: inline-block; color: #e0f2fe; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; }}
-.title {{ font-size: 14px; font-weight: 600; margin: 0 0 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.path {{ font-size: 11px; color: #94a3b8; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.badge {{ display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; }}
+.title {{ font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: #e2e4e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.path {{ font-size: 11px; color: #9699a2; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 </style></head><body><h1>📦 设计项目全景视觉画廊 (共 {len(self.current_display_list)} 个项目)</h1><div class="grid">{"".join(cards_html)}</div></body></html>"""
         try:
             with open(html_file, "w", encoding="utf-8") as f:
