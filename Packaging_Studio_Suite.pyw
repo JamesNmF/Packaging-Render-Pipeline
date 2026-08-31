@@ -60,9 +60,24 @@ BLENDER_EXE = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 if not os.path.exists(BLENDER_EXE):
     BLENDER_EXE = "blender"
 
-DEFAULT_TEMPLATE = os.path.join(
-    os.path.expanduser("~"), "Desktop", "AI_Blender包装渲染辅助工具", "templates", "Packaging_Master_Template.blend"
-)
+def get_valid_template_blend(cfg=None):
+    candidates = []
+    if cfg and cfg.get("template_blend_path"):
+        candidates.append(cfg.get("template_blend_path"))
+    candidates.extend([
+        r"E:\zjc\默认文件.blend",
+        r"C:\Users\qq424\Packaging_Tools\templates\Packaging_Master_Template.blend",
+        os.path.join(os.path.dirname(__file__), "templates", "Packaging_Master_Template.blend"),
+        os.path.join(os.path.dirname(__file__), "Packaging_Master_Template.blend"),
+        r"C:\Users\qq424\Desktop\Packaging-Render-Pipeline\templates\Packaging_Master_Template.blend",
+        r"E:\zjc\预设1.blend"
+    ])
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return ""
+
+DEFAULT_TEMPLATE = get_valid_template_blend()
 
 DEFAULT_WORKSPACES = []
 for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects"]:
@@ -1750,9 +1765,19 @@ class PackagingStudioSuite:
         design_sub = rule.get("design_sub", subfolders[0] if subfolders else "")
         blend_sub = rule.get("blend_sub", subfolders[2] if len(subfolders) > 2 else (subfolders[0] if subfolders else ""))
         
-        template_blend = self.cfg.get("template_blend_path", "")
-        if not template_blend or not os.path.exists(template_blend):
-            template_blend = DEFAULT_TEMPLATE
+        template_blend = get_valid_template_blend(self.cfg)
+        
+        # 如果依然没有找到现成的模板文件，但安装了 Blender，就用 Blender 自动生成一个
+        if not template_blend and os.path.exists(BLENDER_EXE):
+            tpl_dir = r"C:\Users\qq424\Packaging_Tools\templates"
+            os.makedirs(tpl_dir, exist_ok=True)
+            auto_tpl = os.path.join(tpl_dir, "Packaging_Master_Template.blend")
+            try:
+                subprocess.run([BLENDER_EXE, "--background", "--python-expr", f"import bpy; bpy.ops.wm.save_as_mainfile(filepath=r'{auto_tpl}')"], capture_output=True, timeout=10)
+                if os.path.exists(auto_tpl):
+                    template_blend = auto_tpl
+            except Exception:
+                pass
             
         auto_create_blend = self.auto_create_blend_var.get()
         auto_open_blender = self.auto_open_blender_var.get()
@@ -1793,6 +1818,11 @@ class PackagingStudioSuite:
             if is_dup:
                 duplicate_count += 1
                 last_proj = proj_dir
+                # 如果是重复文件，仍然尝试找到现有的 blend 文件以备打开
+                if blend_sub:
+                    test_b = os.path.join(proj_dir, blend_sub, f"{sku}.blend")
+                    if os.path.exists(test_b):
+                        last_blend = test_b
                 continue
                 
             dest_name = f"{sku}_v{len(existing_files)+1:02d}{ext}"
@@ -1810,13 +1840,22 @@ class PackagingStudioSuite:
                 target_blend_dir = os.path.join(proj_dir, blend_sub)
                 os.makedirs(target_blend_dir, exist_ok=True)
                 target_blend = os.path.join(target_blend_dir, f"{sku}.blend")
-                if not os.path.exists(target_blend) and template_blend and os.path.exists(template_blend):
-                    try:
-                        shutil.copy2(template_blend, target_blend)
-                        last_blend = target_blend
-                    except Exception:
-                        pass
-                elif os.path.exists(target_blend):
+                
+                if not os.path.exists(target_blend):
+                    if template_blend and os.path.exists(template_blend):
+                        try:
+                            shutil.copy2(template_blend, target_blend)
+                            last_blend = target_blend
+                        except Exception as e:
+                            print(f"Error copying template blend: {e}")
+                    elif os.path.exists(BLENDER_EXE):
+                        try:
+                            subprocess.run([BLENDER_EXE, "--background", "--python-expr", f"import bpy; bpy.ops.wm.save_as_mainfile(filepath=r'{target_blend}')"], capture_output=True, timeout=10)
+                            if os.path.exists(target_blend):
+                                last_blend = target_blend
+                        except Exception:
+                            pass
+                else:
                     last_blend = target_blend
 
             if auto_append_excel and excel_path and os.path.exists(excel_path):
