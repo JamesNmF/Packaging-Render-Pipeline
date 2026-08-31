@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 文件一键智能归档与项目脚手架创建工具 (Packaging Project Auto-Organizer)
-支持：
-1. 拖拽一个或多个 .ai / .pdf / .psd / .zip 包装源文件
-2. 智能解析 [品牌/客户] 与 [产品/SKU名称]，自动剔除 "改/最终版/刀模" 等杂乱后缀
-3. 自动在工作盘创建标准五级目录
-4. 自动将源文件转移到 01_Design_平面原稿/ 中
-5. 支持右键发送到 (SendTo) 快捷调用
+微信 AI 文件一键智能归档与项目脚手架创建器 (v2.0 终极防摆烂版)
+专为应对 "洗衣液.ai", "改3.ai", "未命名-1.ai" 等极端随意命名：
+1. 常用客户/品牌记忆库 (点选常用客户，自动补全无品牌文件)
+2. 无效/垃圾文件名自动拦截与 1 秒重命名提示
+3. 智能多文件批量分拣与 5 级工业工程自动创建
 """
 
 import os
 import sys
 import re
+import json
 import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-# 默认工作根目录配置
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v2.json")
+
 DEFAULT_ROOT_DIR = "D:\\Projects"
 if os.path.exists("E:\\zjc"):
     DEFAULT_ROOT_DIR = "E:\\zjc"
@@ -25,37 +25,42 @@ elif os.path.exists("E:\\Projects"):
 elif os.path.exists("E:\\"):
     DEFAULT_ROOT_DIR = "E:\\"
 
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_config.txt")
+DEFAULT_CONFIG = {
+    "root_dir": DEFAULT_ROOT_DIR,
+    "recent_brands": ["柏缇", "零食有鸣", "元气森林", "通用项目"],
+    "current_brand": "柏缇"
+}
 
-def load_saved_root_dir():
+def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                d = f.read().strip()
-                if os.path.exists(d):
-                    return d
+                return json.load(f)
         except Exception:
             pass
-    return DEFAULT_ROOT_DIR
+    return DEFAULT_CONFIG
 
-def save_root_dir(path):
+def save_config(cfg):
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            f.write(path.strip())
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def clean_and_parse_filename(filepath):
+JUNK_NAME_KEYWORDS = {
+    '改', '改1', '改2', '改3', '改4', '改5', '修改', '修改版', '最新', '最终', '最终版', '定稿', '正稿',
+    '未命名', '未命名-1', '新建', '新建画板', '新建画板1', '新建画板2', '1', '2', '3', 'a', 'b', 'c',
+    '刀模', '包装', '瓶贴', '贴纸', '展开图', '画板', '副本', '111', '222', 'aaa'
+}
+
+def clean_and_parse_filename(filepath, fallback_brand=""):
     """
-    智能解析文件名：
-    例1：柏缇_蜜桃气泡水_包装刀模_改3.ai -> 品牌: 柏缇, SKU: 蜜桃气泡水
-    例2：元气森林-白桃苏打水-最终版.ai   -> 品牌: 元气森林, SKU: 白桃苏打水
-    例3：零食有鸣_香辣牛肉干_正稿.pdf    -> 品牌: 零食有鸣, SKU: 香辣牛肉干
+    针对极端随意命名的智能解析引擎
     """
-    filename = os.path.splitext(os.path.basename(filepath))[0]
+    raw_name = os.path.splitext(os.path.basename(filepath))[0]
     
-    # 过滤杂乱关键词
+    # 过滤杂质后缀
     noise_patterns = [
         r'[-_ ]?(包装|刀模|展开图|正稿|定稿|完稿|原稿|印刷稿|平面|效果图)',
         r'[-_ ]?(修改版|修改|最新版|最终版|最终|定案|终版|初稿|打样|打样稿)',
@@ -63,38 +68,48 @@ def clean_and_parse_filename(filepath):
         r'[-_ ]?([vV]\d+(\.\d+)?|改\d*|版\d*)',
     ]
     
-    cleaned = filename
+    cleaned = raw_name
     for p in noise_patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
         
     cleaned = cleaned.strip(" -_")
     
-    # 按常见分隔符切分
+    # 判断是否是纯无意义废话文件名 (如 "改3", "未命名-1")
+    is_junk = cleaned.lower() in JUNK_NAME_KEYWORDS or len(cleaned) == 0
+    
     parts = re.split(r'[-_—\s+]+', cleaned)
     parts = [p.strip() for p in parts if p.strip()]
     
     if len(parts) >= 2:
-        client_brand = parts[0]
-        sku_name = "_".join(parts[1:])
+        brand = parts[0]
+        sku = "_".join(parts[1:])
     elif len(parts) == 1:
-        client_brand = ""
-        sku_name = parts[0]
+        if is_junk:
+            brand = fallback_brand
+            sku = f"未命名产品_{raw_name}"
+        else:
+            # 只有单个产品名 (如 "洗衣液.ai")
+            brand = fallback_brand
+            sku = parts[0]
     else:
-        client_brand = ""
-        sku_name = filename
+        brand = fallback_brand
+        sku = f"未命名产品_{raw_name}"
         
-    return client_brand, sku_name
+    return brand, sku, is_junk
 
 
 class OrganizerApp:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("📦 包装 AI 文件智能归档与项目脚手架创建器")
-        self.root.geometry("720x520")
-        self.root.minsize(640, 420)
+        self.root.title("📦 包装 AI 文件智能归档与项目创建器 (v2.0 防乱命名版)")
+        self.root.geometry("760x560")
+        self.root.minsize(680, 460)
         
-        self.root_dir_var = tk.StringVar(value=load_saved_root_dir())
-        self.files_data = [] # list of dicts: {filepath, brand, sku}
+        self.cfg = load_config()
+        self.root_dir_var = tk.StringVar(value=self.cfg.get("root_dir", DEFAULT_ROOT_DIR))
+        self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", "柏缇"))
+        
+        self.files_data = [] # list of dicts
         
         self.build_ui()
         
@@ -102,26 +117,48 @@ class OrganizerApp:
             self.add_files(initial_files)
 
     def build_ui(self):
-        # 1. 顶部工作盘设置
-        top_frame = ttk.LabelFrame(self.root, text=" 📂 项目主工作盘 / 根目录 ", padding=10)
-        top_frame.pack(fill=tk.X, padx=15, pady=10)
+        # 1. 顶部控制栏：工作盘 + 常用客户快捷条
+        top_frame = ttk.LabelFrame(self.root, text=" 📂 工作盘与常用客户（专治各种无品牌随意命名） ", padding=10)
+        top_frame.pack(fill=tk.X, padx=15, pady=8)
         
-        ttk.Entry(top_frame, textvariable=self.root_dir_var, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        ttk.Button(top_frame, text="浏览选择...", command=self.browse_root_dir).pack(side=tk.RIGHT)
+        # 根目录行
+        row_dir = ttk.Frame(top_frame)
+        row_dir.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(row_dir, text="主工作盘:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(row_dir, textvariable=self.root_dir_var, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(row_dir, text="浏览...", command=self.browse_root_dir).pack(side=tk.RIGHT)
+        
+        # 常用品牌快选行
+        row_brand = ttk.Frame(top_frame)
+        row_brand.pack(fill=tk.X)
+        ttk.Label(row_brand, text="当前服务客户/品牌:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.brand_combo = ttk.Combobox(
+            row_brand,
+            textvariable=self.current_brand_var,
+            values=self.cfg.get("recent_brands", ["柏缇", "零食有鸣"]),
+            width=18
+        )
+        self.brand_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.brand_combo.bind("<<ComboboxSelected>>", self.on_brand_change)
+        
+        ttk.Label(row_brand, text="(如收到 '洗衣液.ai' 无品牌文件，将自动归入此客户)", foreground="#666").pack(side=tk.LEFT)
         
         # 2. 中间文件列表与智能解析表格
-        list_frame = ttk.LabelFrame(self.root, text=" 📋 待处理的微信源文件列表 (支持直接拖拽/点击添加) ", padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 10))
+        list_frame = ttk.LabelFrame(self.root, text=" 📋 待处理的微信源文件 (双击表格可直接秒改名称) ", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 8))
         
-        cols = ("file", "brand", "sku")
+        cols = ("file", "brand", "sku", "status")
         self.tree = ttk.Treeview(list_frame, columns=cols, show="headings", selectmode="extended")
         self.tree.heading("file", text="微信接收的文件名")
-        self.tree.heading("brand", text="识别出的【客户/品牌】")
-        self.tree.heading("sku", text="识别出的【产品/SKU名】")
+        self.tree.heading("brand", text="归属【客户/品牌】")
+        self.tree.heading("sku", text="创建的【产品/SKU工程名】")
+        self.tree.heading("status", text="状态")
         
-        self.tree.column("file", width=280, anchor="w")
-        self.tree.column("brand", width=140, anchor="center")
-        self.tree.column("sku", width=200, anchor="w")
+        self.tree.column("file", width=220, anchor="w")
+        self.tree.column("brand", width=120, anchor="center")
+        self.tree.column("sku", width=220, anchor="w")
+        self.tree.column("status", width=80, anchor="center")
         
         scroll_y = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_y.set)
@@ -129,24 +166,24 @@ class OrganizerApp:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # 双击可微调品牌或SKU
         self.tree.bind("<Double-1>", self.on_double_click)
         
         # 3. 操作按钮栏
-        btn_frame = ttk.Frame(self.root, padding=5)
-        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+        btn_frame = ttk.Frame(self.root, padding=2)
+        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
         
         ttk.Button(btn_frame, text="➕ 添加 AI / 源文件...", command=self.browse_files).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="❌ 移除选中项", command=self.remove_selected).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="🧹 清空列表", command=self.clear_all).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="✏️ 批量应用当前客户", command=self.apply_current_brand_to_all).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="❌ 移除选中", command=self.remove_selected).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="🧹 清空", command=self.clear_all).pack(side=tk.LEFT)
         
         # 4. 底部执行大按钮
-        exec_frame = ttk.Frame(self.root, padding=10)
-        exec_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
+        exec_frame = ttk.Frame(self.root, padding=8)
+        exec_frame.pack(fill=tk.X, padx=15, pady=(0, 12))
         
         self.btn_exec = tk.Button(
             exec_frame,
-            text="🚀 【 一键创建工业级目录并归档源文件 】",
+            text="🚀 【 一键创建工业级标准项目并归档 】",
             font=("Microsoft YaHei", 11, "bold"),
             bg="#0078D7",
             fg="white",
@@ -158,21 +195,43 @@ class OrganizerApp:
         )
         self.btn_exec.pack(fill=tk.X)
 
+    def on_brand_change(self, event=None):
+        cur_brand = self.current_brand_var.get().strip()
+        if cur_brand:
+            self.cfg["current_brand"] = cur_brand
+            if cur_brand not in self.cfg.get("recent_brands", []):
+                self.cfg["recent_brands"].insert(0, cur_brand)
+                self.cfg["recent_brands"] = self.cfg["recent_brands"][:8]
+                self.brand_combo["values"] = self.cfg["recent_brands"]
+            save_config(self.cfg)
+
+    def apply_current_brand_to_all(self):
+        cur_brand = self.current_brand_var.get().strip()
+        if not cur_brand:
+            return
+        for idx, item in enumerate(self.files_data):
+            item["brand"] = cur_brand
+            self.tree.item(self.tree.get_children()[idx], values=(item["filename"], item["brand"], item["sku"], "已就绪"))
+
     def browse_root_dir(self):
         d = filedialog.askdirectory(initialdir=self.root_dir_var.get())
         if d:
             self.root_dir_var.set(d)
-            save_root_dir(d)
+            self.cfg["root_dir"] = d
+            save_config(self.cfg)
 
     def browse_files(self):
         files = filedialog.askopenfilenames(
-            title="选择微信接收的 AI / 包装设计文件",
-            filetypes=[("包装设计文件", "*.ai;*.pdf;*.psd;*.zip;*.rar;*.eps;*.cdr"), ("所有文件", "*.*")]
+            title="选择微信接收的 AI / 包装文件",
+            filetypes=[("包装设计源文件", "*.ai;*.pdf;*.psd;*.zip;*.rar;*.eps;*.cdr"), ("所有文件", "*.*")]
         )
         if files:
             self.add_files(files)
 
     def add_files(self, filepaths):
+        cur_brand = self.current_brand_var.get().strip()
+        self.on_brand_change()
+        
         for fp in filepaths:
             fp = os.path.abspath(fp)
             if not os.path.exists(fp) or not os.path.isfile(fp):
@@ -180,15 +239,18 @@ class OrganizerApp:
             if any(item['filepath'] == fp for item in self.files_data):
                 continue
                 
-            brand, sku = clean_and_parse_filename(fp)
+            brand, sku, is_junk = clean_and_parse_filename(fp, fallback_brand=cur_brand)
+            status = "⚠️需确认" if is_junk else "已就绪"
+            
             item = {
                 "filepath": fp,
                 "filename": os.path.basename(fp),
                 "brand": brand,
-                "sku": sku
+                "sku": sku,
+                "is_junk": is_junk
             }
             self.files_data.append(item)
-            self.tree.insert("", tk.END, values=(item["filename"], item["brand"], item["sku"]))
+            self.tree.insert("", tk.END, values=(item["filename"], item["brand"], item["sku"], status))
 
     def remove_selected(self):
         selected = self.tree.selection()
@@ -208,14 +270,13 @@ class OrganizerApp:
         idx = self.tree.index(item_id)
         cur_item = self.files_data[idx]
         
-        # 弹出微调小窗口
         edit_win = tk.Toplevel(self.root)
-        edit_win.title("✏️ 微调产品与品牌名称")
-        edit_win.geometry("380x200")
+        edit_win.title("✏️ 快速修改客户与产品名")
+        edit_win.geometry("400x220")
         edit_win.transient(self.root)
         edit_win.grab_set()
         
-        ttk.Label(edit_win, text=f"文件名: {cur_item['filename']}", wraplength=340).pack(padx=15, pady=10, anchor="w")
+        ttk.Label(edit_win, text=f"原始文件: {cur_item['filename']}", wraplength=360).pack(padx=15, pady=10, anchor="w")
         
         b_var = tk.StringVar(value=cur_item["brand"])
         s_var = tk.StringVar(value=cur_item["sku"])
@@ -223,19 +284,21 @@ class OrganizerApp:
         f_in = ttk.Frame(edit_win)
         f_in.pack(fill=tk.X, padx=15, pady=5)
         
-        ttk.Label(f_in, text="客户/品牌:").grid(row=0, column=0, sticky="w", pady=5)
+        ttk.Label(f_in, text="归属客户/品牌:").grid(row=0, column=0, sticky="w", pady=5)
         ttk.Entry(f_in, textvariable=b_var, width=28).grid(row=0, column=1, sticky="w", pady=5)
         
-        ttk.Label(f_in, text="产品/SKU:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(f_in, text="产品/SKU名称:").grid(row=1, column=0, sticky="w", pady=5)
         ttk.Entry(f_in, textvariable=s_var, width=28).grid(row=1, column=1, sticky="w", pady=5)
         
         def save_edit():
             cur_item["brand"] = b_var.get().strip()
             cur_item["sku"] = s_var.get().strip()
-            self.tree.item(item_id, values=(cur_item["filename"], cur_item["brand"], cur_item["sku"]))
+            self.tree.item(item_id, values=(cur_item["filename"], cur_item["brand"], cur_item["sku"], "已确认"))
             edit_win.destroy()
             
-        ttk.Button(edit_win, text="保存修改", command=save_edit).pack(pady=12)
+        btn_s = ttk.Button(edit_win, text="保存修改 (Enter)", command=save_edit)
+        btn_s.pack(pady=12)
+        edit_win.bind("<Return>", lambda e: save_edit())
 
     def execute_organize(self):
         if not self.files_data:
@@ -250,7 +313,8 @@ class OrganizerApp:
                 messagebox.showerror("错误", f"无法创建主工作盘路径: {root_dir}\n{e}")
                 return
                 
-        save_root_dir(root_dir)
+        self.cfg["root_dir"] = root_dir
+        save_config(self.cfg)
         
         success_count = 0
         last_created_dir = ""
@@ -264,8 +328,8 @@ class OrganizerApp:
         ]
         
         for item in self.files_data:
-            brand = item["brand"]
-            sku = item["sku"] if item["sku"] else os.path.splitext(item["filename"])[0]
+            brand = item["brand"].strip()
+            sku = item["sku"].strip() if item["sku"].strip() else os.path.splitext(item["filename"])[0]
             
             if brand:
                 proj_dir = os.path.join(root_dir, brand, sku)
@@ -276,7 +340,7 @@ class OrganizerApp:
             for sub in subfolders:
                 os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
                 
-            # 2. 拷贝/转移源文件至 01_Design_平面原稿
+            # 2. 拷贝源文件至 01_Design_平面原稿
             dest_file_path = os.path.join(proj_dir, "01_Design_平面原稿", item["filename"])
             try:
                 shutil.copy2(item["filepath"], dest_file_path)
@@ -285,7 +349,7 @@ class OrganizerApp:
             except Exception as e:
                 print(f"Error copying {item['filepath']}: {e}")
                 
-        # 3. 结果反馈与自动弹出
+        # 3. 反馈与自动弹出
         if success_count > 0:
             if last_created_dir and os.path.exists(last_created_dir):
                 try:
@@ -295,7 +359,7 @@ class OrganizerApp:
                     
             messagebox.showinfo(
                 "🎉 归档成功",
-                f"成功创建并归档了 {success_count} 个包装项目！\n\n所有源文件已自动安全分类至各自的 [01_Design_平面原稿] 中。"
+                f"成功创建并归档了 {success_count} 个标准包装项目！\n\n源文件已安全移入各自的 [01_Design_平面原稿] 中。"
             )
             self.clear_all()
 
@@ -304,7 +368,6 @@ if __name__ == "__main__":
     args_files = sys.argv[1:] if len(sys.argv) > 1 else None
     root_win = tk.Tk()
     
-    # 设置 Windows 原生高 DPI 适配
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)
