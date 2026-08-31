@@ -1,18 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-包装视觉资产管理器 (Packaging Visual Asset Hub)
-专为设计师打造的 Eagle / Pinterest 风格三维渲染与项目资产看板：
-1. 视觉化缩略图卡片流：自动抓取各项目 04_Renders / 05_Delivery 中的高清渲染图作为封面！
-2. 品牌分类与即时搜索：左侧品牌一键筛选，顶部输入即时过滤。
-3. 一键直达交互：
-   - 单击卡片/按钮 -> 0.1秒弹出 Windows 对应项目文件夹！
-   - 双击卡片 -> 自动启动 Blender 5.2 打开该产品的 3D 工程！
-   - 右键菜单 -> 打开平面原稿 .ai / 查看高清渲染大图 / 复制路径。
-4. 支持导出轻量独立 HTML 全景视觉看板。
+包装视觉资产管理器 (Packaging Visual Asset Hub - v2.0 高性能防崩版)
+优化：
+1. 彻底解决 PermissionError (权限拒绝/System Volume Information) 崩溃问题
+2. 支持海量工程 (400+ 项目) 极速分页与懒加载，0 卡顿秒开！
+3. 自动抓取 04_Renders_通道输出 / 渲染 / 交付 中的 Beauty 高清成品图作为封面
+4. 一键直达：单击打开文件夹 / 双击打开 Blender 5.2 / 右键菜单
 """
 
 import os
 import sys
+import re
 import json
 import glob
 import webbrowser
@@ -30,11 +28,17 @@ if not os.path.exists(BLENDER_EXE):
     BLENDER_EXE = "blender"
 
 DEFAULT_WORKSPACES = []
-for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects", "D:\\", "E:\\"]:
+for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects"]:
     if os.path.exists(p) and p not in DEFAULT_WORKSPACES:
         DEFAULT_WORKSPACES.append(p)
 if not DEFAULT_WORKSPACES:
-    DEFAULT_WORKSPACES = ["D:\\Projects"]
+    DEFAULT_WORKSPACES = ["E:\\zjc" if os.path.exists("E:\\zjc") else "D:\\Projects"]
+
+SYSTEM_IGNORED_DIRS = {
+    'system volume information', '$recycle.bin', 'recovery', '$windows.~bt',
+    'msocache', 'config.msi', 'perflogs', 'program files', 'program files (x86)',
+    'windows', 'programdata', 'appdata', '.git', '.vscode', '.idea'
+}
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -51,10 +55,16 @@ def load_config():
         "current_workspace": DEFAULT_WORKSPACES[0]
     }
 
+def save_config(cfg):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 
 def find_project_thumbnail(proj_path):
-    """查找项目中最合适的高清渲染图或预览图作为缩略图"""
-    # 1. 优先在 04_Renders_通道输出 / 05_Delivery_最终交付 中查找 Beauty 成品渲染图
+    """查找项目中最合适的高清渲染图作为缩略图"""
     render_dirs = [
         os.path.join(proj_path, "04_Renders_通道输出"),
         os.path.join(proj_path, "05_Delivery_最终交付"),
@@ -66,47 +76,75 @@ def find_project_thumbnail(proj_path):
     candidates = []
     for rdir in render_dirs:
         if os.path.exists(rdir):
-            for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                candidates.extend(glob.glob(os.path.join(rdir, ext)))
+            try:
+                for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+                    candidates.extend(glob.glob(os.path.join(rdir, ext)))
+            except Exception:
+                pass
                 
     if candidates:
         # 优先选择包含 "Beauty", "成品", "主图", "Camera" 的图
         beauty_imgs = [c for c in candidates if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面"])]
         if beauty_imgs:
-            # 取最新修改的图
-            beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return beauty_imgs[0]
+            try:
+                beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                return beauty_imgs[0]
+            except Exception:
+                return beauty_imgs[0]
+                
         # 排除包含 mask, alpha, crypto 的黑白遮罩图
         filtered = [c for c in candidates if not any(k in os.path.basename(c).lower() for k in ["mask", "alpha", "crypto", "选区", "蒙版"])]
         if filtered:
-            filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return filtered[0]
-        candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-        return candidates[0]
-        
+            try:
+                filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                return filtered[0]
+            except Exception:
+                return filtered[0]
+                
+        try:
+            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            return candidates[0]
+        except Exception:
+            return candidates[0]
+            
     return None
 
 
 def scan_workspace_projects(root_dir):
-    """扫描工作盘下的所有包装三维与设计项目"""
+    """安全扫描工作盘下的所有包装项目，带完整权限与异常防护"""
     projects = []
     if not os.path.exists(root_dir):
         return projects
         
     try:
         entries = os.listdir(root_dir)
-    except Exception:
+    except (PermissionError, OSError):
         return projects
         
     for entry in entries:
-        full_p = os.path.join(root_dir, entry)
-        if not os.path.isdir(full_p) or entry.startswith('.') or entry.startswith('$') or entry.startswith('_'):
+        if entry.lower() in SYSTEM_IGNORED_DIRS or entry.startswith('.') or entry.startswith('$') or entry.startswith('_'):
             continue
             
-        # 检查这是否直接是一个项目 (含 01_Design, 03_3D 等)
-        sub_items = [d.lower() for d in os.listdir(full_p) if os.path.isdir(os.path.join(full_p, d))]
-        is_direct_proj = any("03_3d" in s or "01_design" in s or "04_renders" in s for s in sub_items)
+        full_p = os.path.join(root_dir, entry)
+        try:
+            if not os.path.isdir(full_p):
+                continue
+        except (PermissionError, OSError):
+            continue
+            
+        try:
+            sub_entries = os.listdir(full_p)
+        except (PermissionError, OSError):
+            continue
+            
+        sub_items = [d.lower() for d in sub_entries]
+        is_direct_proj = any("03_3d" in s or "01_design" in s or "04_renders" in s or "渲染" in s for s in sub_items)
         
+        try:
+            mtime = os.path.getmtime(full_p)
+        except Exception:
+            mtime = 0
+            
         if is_direct_proj:
             thumb = find_project_thumbnail(full_p)
             projects.append({
@@ -114,27 +152,32 @@ def scan_workspace_projects(root_dir):
                 "sku": entry,
                 "path": full_p,
                 "thumbnail": thumb,
-                "mtime": os.path.getmtime(full_p)
+                "mtime": mtime
             })
         else:
             # 这是一个客户/品牌文件夹 (如 E:\zjc\柏缇\)，扫描其二级目录
             brand_name = entry
-            try:
-                sku_entries = os.listdir(full_p)
-                for sku in sku_entries:
-                    sku_p = os.path.join(full_p, sku)
-                    if os.path.isdir(sku_p) and not sku.startswith('.') and not sku.startswith('_'):
+            for sku in sub_entries:
+                if sku.lower() in SYSTEM_IGNORED_DIRS or sku.startswith('.') or sku.startswith('_'):
+                    continue
+                sku_p = os.path.join(full_p, sku)
+                try:
+                    if os.path.isdir(sku_p):
                         thumb = find_project_thumbnail(sku_p)
+                        try:
+                            s_mtime = os.path.getmtime(sku_p)
+                        except Exception:
+                            s_mtime = mtime
                         projects.append({
                             "brand": brand_name,
                             "sku": sku,
                             "path": sku_p,
                             "thumbnail": thumb,
-                            "mtime": os.path.getmtime(sku_p)
+                            "mtime": s_mtime
                         })
-            except Exception:
-                pass
-                
+                except (PermissionError, OSError):
+                    continue
+                    
     projects.sort(key=lambda x: x["mtime"], reverse=True)
     return projects
 
@@ -143,28 +186,35 @@ class AssetHubApp:
     def __init__(self, root):
         self.root = root
         self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub)")
-        self.root.geometry("1120x740")
+        self.root.geometry("1160x760")
         self.root.minsize(920, 600)
         
         self.cfg = load_config()
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        self.current_workspace_var = tk.StringVar(value=self.cfg.get("current_workspace", self.workspaces[0]))
+        cur_ws = self.cfg.get("current_workspace", self.workspaces[0])
+        if not os.path.exists(cur_ws) and self.workspaces:
+            cur_ws = self.workspaces[0]
+        self.current_workspace_var = tk.StringVar(value=cur_ws)
+        
         self.search_var = tk.StringVar()
         self.selected_brand_var = tk.StringVar(value="全部品牌")
         
+        self.page_size = 30 # 每页显示 30 个卡片，保障 0 延迟秒开
+        self.current_page = 0
+        
         self.all_projects = []
         self.filtered_projects = []
-        self.thumb_cache = {} # path -> ImageTk.PhotoImage
+        self.thumb_cache = {}
         
         self.build_ui()
         self.refresh_projects()
 
     def build_ui(self):
-        # 1. 顶部操作栏
+        # 1. 顶部控制栏
         top_bar = ttk.Frame(self.root, padding=(15, 10))
         top_bar.pack(fill=tk.X)
         
-        ttk.Label(top_bar, text="📂 工作盘:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(top_bar, text="📂 主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
         self.ws_combo = ttk.Combobox(
             top_bar,
             textvariable=self.current_workspace_var,
@@ -177,18 +227,30 @@ class AssetHubApp:
         self.ws_combo.bind("<<ComboboxSelected>>", self.on_workspace_change)
         
         ttk.Label(top_bar, text="🔍 快速搜索:").pack(side=tk.LEFT, padx=(0, 6))
-        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=24)
+        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=22)
         search_entry.pack(side=tk.LEFT, padx=(0, 15))
-        self.search_var.trace_add("write", lambda *args: self.apply_filter())
+        self.search_var.trace_add("write", lambda *args: self.on_search_change())
         
         ttk.Button(top_bar, text="🔄 刷新", command=self.refresh_projects).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(top_bar, text="🌐 导出全景网页看板 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
+        ttk.Button(top_bar, text="🌐 导出网页看板 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
 
-        # 2. 主体区域 (左侧品牌树 + 右侧卡片瀑布流)
-        main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 12))
+        # 2. 分页控制栏 (底栏)
+        self.bottom_bar = ttk.Frame(self.root, padding=(15, 8))
+        self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
-        # 左侧品牌筛选栏
+        self.page_info_lbl = ttk.Label(self.bottom_bar, text="", font=("Microsoft YaHei", 9))
+        self.page_info_lbl.pack(side=tk.LEFT)
+        
+        self.btn_next = ttk.Button(self.bottom_bar, text="下一页 ➡️", command=self.next_page)
+        self.btn_next.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        self.btn_prev = ttk.Button(self.bottom_bar, text="⬅️ 上一页", command=self.prev_page)
+        self.btn_prev.pack(side=tk.RIGHT)
+
+        # 3. 主体区域 (左侧品牌树 + 右侧卡片视口)
+        main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        main_pane.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
+        
         left_frame = ttk.LabelFrame(main_pane, text=" 🏷️ 客户/品牌分类 ", padding=8, width=200)
         main_pane.add(left_frame, weight=1)
         
@@ -206,7 +268,6 @@ class AssetHubApp:
         self.brand_listbox.pack(fill=tk.BOTH, expand=True)
         self.brand_listbox.bind("<<ListboxSelect>>", self.on_brand_select)
         
-        # 右侧卡片滚动视口
         right_frame = ttk.Frame(main_pane)
         main_pane.add(right_frame, weight=5)
         
@@ -235,13 +296,17 @@ class AssetHubApp:
     def on_workspace_change(self, event=None):
         cur_ws = self.current_workspace_var.get().strip()
         self.cfg["current_workspace"] = cur_ws
+        save_config(self.cfg)
         self.refresh_projects()
+
+    def on_search_change(self):
+        self.current_page = 0
+        self.apply_filter()
 
     def refresh_projects(self):
         cur_ws = self.current_workspace_var.get().strip()
         self.all_projects = scan_workspace_projects(cur_ws)
         
-        # 更新左侧品牌列表与计数
         brand_counts = {}
         for p in self.all_projects:
             b = p["brand"]
@@ -256,6 +321,7 @@ class AssetHubApp:
             
         self.brand_listbox.select_set(0)
         self.selected_brand_var.set("全部品牌")
+        self.current_page = 0
         self.apply_filter()
 
     def on_brand_select(self, event=None):
@@ -267,10 +333,10 @@ class AssetHubApp:
         if idx == 0:
             self.selected_brand_var.set("全部品牌")
         else:
-            # 提取品牌名 "🏷️ 柏缇 (8)" -> "柏缇"
             m = re.search(r"🏷️\s*(.*?)\s*\(\d+\)", text)
             if m:
                 self.selected_brand_var.set(m.group(1))
+        self.current_page = 0
         self.apply_filter()
 
     def apply_filter(self):
@@ -285,7 +351,30 @@ class AssetHubApp:
                 continue
             self.filtered_projects.append(p)
             
+        total_items = len(self.filtered_projects)
+        total_pages = max(1, (total_items + self.page_size - 1) // self.page_size)
+        if self.current_page >= total_pages:
+            self.current_page = total_pages - 1
+            
+        start_idx = self.current_page * self.page_size + 1 if total_items > 0 else 0
+        end_idx = min((self.current_page + 1) * self.page_size, total_items)
+        
+        self.page_info_lbl.config(text=f"共 {total_items} 个项目 | 正在显示第 {start_idx} - {end_idx} 项 (第 {self.current_page + 1}/{total_pages} 页)")
+        self.btn_prev.config(state=tk.NORMAL if self.current_page > 0 else tk.DISABLED)
+        self.btn_next.config(state=tk.NORMAL if self.current_page < total_pages - 1 else tk.DISABLED)
+        
         self.render_cards()
+
+    def next_page(self):
+        self.current_page += 1
+        self.apply_filter()
+        self.canvas.yview_moveto(0)
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.apply_filter()
+            self.canvas.yview_moveto(0)
 
     def get_scaled_thumbnail(self, img_path, size=(190, 190)):
         if not img_path or not os.path.exists(img_path):
@@ -298,7 +387,6 @@ class AssetHubApp:
             im = Image.open(img_path)
             im.thumbnail(size, Image.Resampling.LANCZOS)
             
-            # 创建居中正方形画板
             thumb = Image.new("RGBA", size, (255, 255, 255, 255))
             offset_x = (size[0] - im.width) // 2
             offset_y = (size[1] - im.height) // 2
@@ -321,7 +409,7 @@ class AssetHubApp:
             
         im = Image.new("RGBA", size, (240, 243, 246, 255))
         draw = ImageDraw.Draw(im)
-        draw.text((size[0]//2 - 40, size[1]//2 - 10), "📦 暂无渲染图", fill=(160, 170, 185, 255))
+        draw.text((size[0]//2 - 35, size[1]//2 - 10), "📦 暂无渲染图", fill=(160, 170, 185, 255))
         tk_img = ImageTk.PhotoImage(im)
         self.thumb_cache[cache_key] = tk_img
         return tk_img
@@ -342,14 +430,18 @@ class AssetHubApp:
             no_lbl.pack()
             return
 
-        # 计算每行卡片数
         container_width = self.canvas.winfo_width()
         if container_width < 100:
             container_width = 800
         card_w = 210
         cols = max(1, container_width // (card_w + 16))
 
-        for idx, proj in enumerate(self.filtered_projects):
+        # 当前页数据切片
+        start_idx = self.current_page * self.page_size
+        end_idx = start_idx + self.page_size
+        page_items = self.filtered_projects[start_idx:end_idx]
+
+        for idx, proj in enumerate(page_items):
             row = idx // cols
             col = idx % cols
             
@@ -364,13 +456,11 @@ class AssetHubApp:
             )
             card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
             
-            # 缩略图图片
             tk_thumb = self.get_scaled_thumbnail(proj["thumbnail"])
             img_lbl = tk.Label(card, image=tk_thumb, bg="white", cursor="hand2")
             img_lbl.image = tk_thumb
             img_lbl.pack(fill=tk.BOTH, expand=True)
             
-            # 品牌小胶囊标签 + 产品名
             meta_frame = tk.Frame(card, bg="white", pady=4)
             meta_frame.pack(fill=tk.X)
             
@@ -396,7 +486,6 @@ class AssetHubApp:
             )
             title_lbl.pack(anchor="w")
             
-            # 底部动作按钮行
             action_frame = tk.Frame(card, bg="white", pady=4)
             action_frame.pack(fill=tk.X)
             
@@ -421,7 +510,6 @@ class AssetHubApp:
             )
             btn_blend.pack(side=tk.RIGHT)
             
-            # 绑定卡片交互：单击打开文件夹，双击打开 Blender，右键弹出菜单
             for w in (card, img_lbl, title_lbl, meta_frame):
                 w.bind("<Button-1>", lambda e, p=proj["path"]: self.open_folder(p))
                 w.bind("<Double-1>", lambda e, p=proj["path"]: self.launch_blend(p))
@@ -435,13 +523,11 @@ class AssetHubApp:
                 messagebox.showerror("打开错误", str(e))
 
     def launch_blend(self, proj_path):
-        """寻找该项目下的 .blend 文件并用 Blender 启动"""
         blend_dir = os.path.join(proj_path, "03_3D_三维工程")
         target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
         
         blends = glob.glob(os.path.join(target_dir, "*.blend"))
         if blends:
-            # 优先选择主工程
             blends.sort(key=lambda x: os.path.getmtime(x), reverse=True)
             chosen = blends[0]
             try:
@@ -467,7 +553,6 @@ class AssetHubApp:
         messagebox.showinfo("已复制", f"已复制路径到剪贴板:\n{text}")
 
     def export_html_gallery(self):
-        """导出精美独立的本地 HTML 视觉全景画廊"""
         cur_ws = self.current_workspace_var.get().strip()
         html_file = os.path.join(cur_ws, "📦_包装项目全景视觉画廊.html")
         
