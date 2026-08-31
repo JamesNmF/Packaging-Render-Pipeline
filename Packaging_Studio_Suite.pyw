@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与视觉资产综合中枢 (Packaging Studio Suite - v7.0 自定义文件夹规则旗舰版)
-重大功能升级：
-1. 【多维度自定义文件夹归档规则 (Custom Folder Rules Manager)】：
-   - 支持自由创建、编辑、克隆、删除多套文件夹结构规则；
-   - 支持自定义子文件夹列表（如 5 阶段流、海报 KV 流、物料制作流、极简 3 目录流等）；
-   - 支持自定义路径组织架构（{客户}/{SKU}、{业务形态}/{客户}/{SKU}、{仅SKU} 等）；
-   - 规则内可视化绑定「源文件存放目录」、「3D工程生成目录」与「渲染图输出目录」；
-   - 规则管理器内置实时目录树实时预览。
-2. 【温润工业石墨灰护眼设计 (Studio Graphite Warm Dark)】。
-3. 【零延迟瞬切架构 (Instant Turbo)】：磁盘持久化 15KB JPEG 缩略图池 + 30 槽位复用池。
-4. 【四大核心业务分类 & Beauty 封面】。
+包装设计与视觉资产综合中枢 (Packaging Studio Suite - v1.0 正式版)
+===================================================================
+【核心功能体系】：
+1. 🖼️ 视觉资产看板 (Visual Asset Hub)：
+   - 物理磁盘 15KB JPEG 缩略图缓存池 + 30 槽位复用池 (Widget Pooling)，极速瞬切 < 5ms；
+   - 自动融合 Excel 产品台账与本地硬盘工程；
+   - 4 大业务形态精准分类：📦 包装 (默认) / 🎁 套盒 / 🖼️ 海报 / 📑 物料；
+   - 自动抓取最新 Beauty 渲染图为封面，支持导出全景 HTML 交互式画廊。
+
+2. 📥 设计源文件分拣与开工 (Source Organizer & Pipeline Launcher)：
+   - 右键“发送到”一键唤起；
+   - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
+   - 自动生成对应 Blender 母版工程并拉起 Blender 5.2 LTS 开工；
+   - 自动将新项目录入《产品列表.xlsx》。
+
+3. 🌿 温润工业石墨灰护眼设计 (Studio Graphite Eye-Care Dark Mode)：
+   - 告别高反差死黑，对标 Blender/Lightroom/Eagle 工业级调色，柔和防眩光。
+===================================================================
 """
 
 import os
@@ -1030,7 +1037,7 @@ class FolderRuleManagerDialog(tk.Toplevel):
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v7.0 自定义规则版)")
+        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v1.0 正式版)")
         self.root.geometry("1260x830")
         self.root.minsize(1020, 660)
         
