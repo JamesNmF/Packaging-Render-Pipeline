@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 文件一键智能归档与项目脚手架创建器 (v2.3 精准白名单管理版)
-核心改动：
-1. 彻底禁用全盘盲目扫描，杜绝把 "素材/临时/字体/下载" 等杂乱文件夹混入品牌列表！
-2. 纯净用户白名单：只有你手动添加或点选的客户才会进入列表。
-3. 提供【➕ 新增】、【❌ 移除】、【📁 选择单个客户文件夹】，100% 精准干净。
+微信 AI 文件一键智能归档与项目脚手架创建器 (v2.4 多工作盘快切 + 白名单版)
+核心功能：
+1. 【多工作盘秒切】：支持添加并记忆多个主力盘符 (如 E:\zjc\, D:\Projects\, F:\移动硬盘\)，下拉一秒切换！
+2. 【纯净白名单】：客户列表 100% 精准可控，绝不掺杂无用杂乱文件夹。
+3. 【极速归档】：拖入微信文件 -> 选工作盘和客户 -> 一秒生成 5 级标准项目目录并归档！
 """
 
 import os
@@ -15,18 +15,18 @@ import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v3.json")
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v4.json")
 
-DEFAULT_ROOT_DIR = "D:\\Projects"
-if os.path.exists("E:\\zjc"):
-    DEFAULT_ROOT_DIR = "E:\\zjc"
-elif os.path.exists("E:\\Projects"):
-    DEFAULT_ROOT_DIR = "E:\\Projects"
-elif os.path.exists("E:\\"):
-    DEFAULT_ROOT_DIR = "E:\\"
+DEFAULT_WORKSPACES = []
+for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects", "D:\\", "E:\\"]:
+    if os.path.exists(p) and p not in DEFAULT_WORKSPACES:
+        DEFAULT_WORKSPACES.append(p)
+if not DEFAULT_WORKSPACES:
+    DEFAULT_WORKSPACES = ["D:\\Projects"]
 
 DEFAULT_CONFIG = {
-    "root_dir": DEFAULT_ROOT_DIR,
+    "workspaces": DEFAULT_WORKSPACES,
+    "current_workspace": DEFAULT_WORKSPACES[0],
     "curated_brands": ["柏缇", "零食有鸣"],
     "current_brand": "柏缇"
 }
@@ -35,7 +35,10 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if not data.get("workspaces"):
+                    data["workspaces"] = DEFAULT_WORKSPACES
+                return data
         except Exception:
             pass
     return DEFAULT_CONFIG
@@ -74,7 +77,6 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
     parts = re.split(r'[-_—\s+]+', cleaned)
     parts = [p.strip() for p in parts if p.strip()]
     
-    # 优先匹配已知白名单品牌
     brand = ""
     sku = ""
     
@@ -106,57 +108,70 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
 class OrganizerApp:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("📦 包装 AI 文件智能归档与项目创建器 (精准白名单版)")
-        self.root.geometry("800x600")
-        self.root.minsize(720, 500)
+        self.root.title("📦 包装 AI 文件智能归档与项目创建器 (v2.4 多工作盘版)")
+        self.root.geometry("820x600")
+        self.root.minsize(740, 500)
         
         self.cfg = load_config()
-        self.root_dir_var = tk.StringVar(value=self.cfg.get("root_dir", DEFAULT_ROOT_DIR))
-        self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", "柏缇"))
+        self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
+        self.current_workspace_var = tk.StringVar(value=self.cfg.get("current_workspace", self.workspaces[0]))
+        
         self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
+        self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", self.curated_brands[0]))
         
         self.files_data = []
         
         self.build_ui()
-        self.update_combo_values()
+        self.update_workspace_combo()
+        self.update_brand_combo()
         
         if initial_files:
             self.add_files(initial_files)
 
     def build_ui(self):
-        # 1. 顶部控制栏：纯净客户白名单 + 工作盘
-        top_frame = ttk.LabelFrame(self.root, text=" 📂 项目主工作盘与指定客户/品牌 ", padding=10)
+        # 1. 顶部控制栏：多工作盘 + 客户白名单
+        top_frame = ttk.LabelFrame(self.root, text=" 📂 多工作盘快速切换 & 客户品牌管理 ", padding=10)
         top_frame.pack(fill=tk.X, padx=15, pady=8)
         
-        # 根目录行
+        # 工作盘快切行
         row_dir = ttk.Frame(top_frame)
         row_dir.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row_dir, text="主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(row_dir, textvariable=self.root_dir_var, font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        ttk.Button(row_dir, text="选择工作盘...", command=self.browse_root_dir).pack(side=tk.RIGHT)
+        ttk.Label(row_dir, text="当前主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
+        
+        self.workspace_combo = ttk.Combobox(
+            row_dir,
+            textvariable=self.current_workspace_var,
+            font=("Microsoft YaHei", 9),
+            width=32,
+            state="readonly"
+        )
+        self.workspace_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self.workspace_combo.bind("<<ComboboxSelected>>", self.on_workspace_select)
+        
+        ttk.Button(row_dir, text="➕ 绑定新工作盘...", command=self.add_workspace).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(row_dir, text="❌ 移除此工作盘", command=self.remove_workspace).pack(side=tk.LEFT)
         
         # 品牌选择与白名单管理行
         row_brand = ttk.Frame(top_frame)
         row_brand.pack(fill=tk.X)
-        ttk.Label(row_brand, text="当前指定客户/品牌:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(row_brand, text="指定客户/品牌:").pack(side=tk.LEFT, padx=(0, 6))
         
         self.brand_combo = ttk.Combobox(
             row_brand,
             textvariable=self.current_brand_var,
             font=("Microsoft YaHei", 9),
-            width=18,
+            width=20,
             state="readonly"
         )
         self.brand_combo.pack(side=tk.LEFT, padx=(0, 8))
         self.brand_combo.bind("<<ComboboxSelected>>", self.on_brand_select)
         
-        # 精准管理按钮（不盲目全盘扫描）
         ttk.Button(row_brand, text="➕ 添加新客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(row_brand, text="📁 点选已有客户文件夹...", command=self.pick_brand_folder).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(row_brand, text="❌ 移除选中客户", command=self.remove_brand).pack(side=tk.LEFT)
+        ttk.Button(row_brand, text="❌ 移除此客户", command=self.remove_brand).pack(side=tk.LEFT)
 
         # 2. 中间文件列表与智能解析表格
-        list_frame = ttk.LabelFrame(self.root, text=" 📋 待处理的微信源文件 (双击任意一行可随时修改品牌或SKU) ", padding=10)
+        list_frame = ttk.LabelFrame(self.root, text=" 📋 待处理的微信源文件 (双击任意一行可快速修改品牌或SKU) ", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 8))
         
         cols = ("file", "brand", "sku", "status")
@@ -166,7 +181,7 @@ class OrganizerApp:
         self.tree.heading("sku", text="创建的【产品/SKU工程名】")
         self.tree.heading("status", text="状态")
         
-        self.tree.column("file", width=240, anchor="w")
+        self.tree.column("file", width=250, anchor="w")
         self.tree.column("brand", width=140, anchor="center")
         self.tree.column("sku", width=240, anchor="w")
         self.tree.column("status", width=80, anchor="center")
@@ -206,8 +221,46 @@ class OrganizerApp:
         )
         self.btn_exec.pack(fill=tk.X)
 
-    def update_combo_values(self):
-        """仅更新纯净白名单列表"""
+    def update_workspace_combo(self):
+        self.workspace_combo["values"] = self.workspaces
+        cur = self.current_workspace_var.get().strip()
+        if (not cur or cur not in self.workspaces) and self.workspaces:
+            self.current_workspace_var.set(self.workspaces[0])
+            self.cfg["current_workspace"] = self.workspaces[0]
+            save_config(self.cfg)
+
+    def on_workspace_select(self, event=None):
+        cur = self.current_workspace_var.get().strip()
+        self.cfg["current_workspace"] = cur
+        save_config(self.cfg)
+
+    def add_workspace(self):
+        d = filedialog.askdirectory(title="选择需要绑定的新工作盘/根目录")
+        if d:
+            norm_d = os.path.normpath(d)
+            if norm_d not in self.workspaces:
+                self.workspaces.insert(0, norm_d)
+                self.cfg["workspaces"] = self.workspaces
+            self.cfg["current_workspace"] = norm_d
+            self.current_workspace_var.set(norm_d)
+            save_config(self.cfg)
+            self.update_workspace_combo()
+            messagebox.showinfo("成功", f"已成功绑定新工作盘: [{norm_d}]！")
+
+    def remove_workspace(self):
+        cur = self.current_workspace_var.get().strip()
+        if len(self.workspaces) <= 1:
+            messagebox.showwarning("提示", "至少需保留一个工作盘路径！")
+            return
+        if messagebox.askyesno("确认", f"确定从列表中移除工作盘 [{cur}] 吗？\n(不会删除硬盘文件)"):
+            self.workspaces.remove(cur)
+            self.cfg["workspaces"] = self.workspaces
+            self.cfg["current_workspace"] = self.workspaces[0]
+            self.current_workspace_var.set(self.workspaces[0])
+            save_config(self.cfg)
+            self.update_workspace_combo()
+
+    def update_brand_combo(self):
         self.brand_combo["values"] = self.curated_brands
         cur = self.current_brand_var.get().strip()
         if (not cur or cur not in self.curated_brands) and self.curated_brands:
@@ -221,7 +274,6 @@ class OrganizerApp:
         save_config(self.cfg)
 
     def add_brand(self):
-        """精准添加新客户"""
         name = simpledialog.askstring("添加新客户", "请输入客户/品牌名称 (如：统一、农夫山泉):", parent=self.root)
         if name and name.strip():
             name = name.strip()
@@ -231,19 +283,18 @@ class OrganizerApp:
                 self.cfg["current_brand"] = name
                 save_config(self.cfg)
                 self.current_brand_var.set(name)
-                self.update_combo_values()
+                self.update_brand_combo()
                 
-                # 自动在工作盘创建该客户文件夹
-                root_dir = self.root_dir_var.get().strip()
-                if root_dir and os.path.exists(root_dir):
-                    os.makedirs(os.path.join(root_dir, name), exist_ok=True)
+                # 自动在当前工作盘创建该客户文件夹
+                cur_ws = self.current_workspace_var.get().strip()
+                if cur_ws and os.path.exists(cur_ws):
+                    os.makedirs(os.path.join(cur_ws, name), exist_ok=True)
                     
-                messagebox.showinfo("成功", f"已精准添加客户: [{name}]！")
+                messagebox.showinfo("成功", f"已成功添加客户: [{name}]！")
 
     def pick_brand_folder(self):
-        """只添加用户明确点选的那个文件夹，绝不盲目读取整盘"""
-        root_dir = self.root_dir_var.get().strip()
-        initial = root_dir if os.path.exists(root_dir) else None
+        cur_ws = self.current_workspace_var.get().strip()
+        initial = cur_ws if os.path.exists(cur_ws) else None
         d = filedialog.askdirectory(title="点选指定的客户/品牌文件夹", initialdir=initial)
         if d:
             brand_name = os.path.basename(os.path.normpath(d))
@@ -254,23 +305,20 @@ class OrganizerApp:
                 self.cfg["current_brand"] = brand_name
                 save_config(self.cfg)
                 self.current_brand_var.set(brand_name)
-                self.update_combo_values()
+                self.update_brand_combo()
 
     def remove_brand(self):
-        """从白名单移除选中的客户（不删硬盘文件）"""
         cur = self.current_brand_var.get().strip()
-        if not cur:
-            return
         if len(self.curated_brands) <= 1:
             messagebox.showwarning("提示", "列表中至少需保留一个客户名称！")
             return
-        if messagebox.askyesno("确认", f"确定从快速选择列表中移除客户 [{cur}] 吗？\n(注意：不会删除硬盘中的实际文件)"):
+        if messagebox.askyesno("确认", f"确定从快速选择列表中移除客户 [{cur}] 吗？\n(不会删除硬盘文件)"):
             self.curated_brands.remove(cur)
             self.cfg["curated_brands"] = self.curated_brands
             self.cfg["current_brand"] = self.curated_brands[0]
-            save_config(self.cfg)
             self.current_brand_var.set(self.curated_brands[0])
-            self.update_combo_values()
+            save_config(self.cfg)
+            self.update_brand_combo()
 
     def apply_current_brand_to_all(self):
         cur_brand = self.current_brand_var.get().strip()
@@ -279,13 +327,6 @@ class OrganizerApp:
         for idx, item in enumerate(self.files_data):
             item["brand"] = cur_brand
             self.tree.item(self.tree.get_children()[idx], values=(item["filename"], item["brand"], item["sku"], "已就绪"))
-
-    def browse_root_dir(self):
-        d = filedialog.askdirectory(initialdir=self.root_dir_var.get())
-        if d:
-            self.root_dir_var.set(d)
-            self.cfg["root_dir"] = d
-            save_config(self.cfg)
 
     def browse_files(self):
         files = filedialog.askopenfilenames(
@@ -371,7 +412,7 @@ class OrganizerApp:
             messagebox.showwarning("提示", "请先添加需要归档的 AI 文件！")
             return
             
-        root_dir = self.root_dir_var.get().strip()
+        root_dir = self.current_workspace_var.get().strip()
         if not root_dir or not os.path.exists(root_dir):
             try:
                 os.makedirs(root_dir, exist_ok=True)
@@ -379,7 +420,7 @@ class OrganizerApp:
                 messagebox.showerror("错误", f"无法创建主工作盘路径: {root_dir}\n{e}")
                 return
                 
-        self.cfg["root_dir"] = root_dir
+        self.cfg["current_workspace"] = root_dir
         save_config(self.cfg)
         
         success_count = 0
@@ -422,7 +463,7 @@ class OrganizerApp:
                     
             messagebox.showinfo(
                 "🎉 归档成功",
-                f"成功创建并归档了 {success_count} 个标准包装项目！\n\n源文件已安全移入各自的 [01_Design_平面原稿] 中。"
+                f"成功在工作盘 [{root_dir}] 下创建并归档了 {success_count} 个标准包装项目！\n\n源文件已安全移入各自的 [01_Design_平面原稿] 中。"
             )
             self.clear_all()
 
