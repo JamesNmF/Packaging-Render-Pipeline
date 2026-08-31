@@ -1,13 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与资产综合中枢 (Packaging Studio Suite - v4.1 自动双向追加同步版)
-新增核心特性：
-1. 【新项目全自动追加写入 Excel】：
-   - 微信收到文件一键归档时，自动将新产品名、分类(瓶装/袋装/盒装/套盒)、路径与时间追加写入《产品列表.xlsx》！
-2. 【资产看板实时自动上架】：
-   - Excel 追加写入后，资产管理器 0.1 秒自动感应，新卡片瞬间上架展示！
-3. 【智能防重复检测】：
-   - 自动检测已有产品，绝不在 Excel 中产生重复行。
+包装设计与资产综合中枢 (Packaging Studio Suite - v4.5 四大分类与Beauty封面终极版)
+核心架构：
+1. 【业务分类严格收敛为 4 类】：
+   - 📦 包装 (默认兜底：单品瓶/袋/盒/罐/软管统一归为包装)
+   - 🎁 套盒 (礼盒/套装/组合装/大礼包)
+   - 🖼️ 海报 (KV/主视觉/展板/电商海报)
+   - 📑 物料 (易拉宝/台卡/展架/折页/堆头/画册)
+
+2. 【智能识别 ➕ 3 处灵活手动选择】：
+   - 自动识别：根据文件名关键词自动识别；无明确标识时 100% 默认兜底为「包装」；
+   - 归档前设置：顶部下拉框 + 批量应用 + 单条双击自由修改；
+   - 资产看板右键随时改分类：鼠标右键卡片一键修改分类，自动同步写入《产品列表.xlsx》。
+
+3. 【Beauty 渲染图封面自动绑定】：
+   - 自动捕获 04_Renders / 目录下最新生成的 Beauty / 成品高清 PNG 作为卡片封面；
+   - 未渲染时展示优雅的「📦 待渲染工程」状态。
+
+4. 【默认打开资产看板，SendTo / 拖拽自动跳转归档开工】。
 """
 
 import os
@@ -15,6 +25,7 @@ import sys
 import re
 import json
 import glob
+import shutil
 import zipfile
 import datetime
 import webbrowser
@@ -54,12 +65,15 @@ SYSTEM_IGNORED_DIRS = {
     'fonts', 'render  preset', 'renderraw', 'studio light hdri pack'
 }
 
+VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
+
 DEFAULT_CONFIG = {
     "workspaces": DEFAULT_WORKSPACES,
     "current_workspace": DEFAULT_WORKSPACES[0],
     "excel_path": DEFAULT_EXCEL_PATH if os.path.exists(DEFAULT_EXCEL_PATH) else "",
     "curated_brands": ["柏缇", "零食有鸣"],
     "current_brand": "柏缇",
+    "default_category": "包装",
     "auto_create_blend": True,
     "auto_open_blender": True,
     "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
@@ -87,6 +101,34 @@ def save_config(cfg):
         pass
 
 
+def normalize_category(raw_cat):
+    """将任意历史或输入分类严格归一化为 4 大核心分类"""
+    if not raw_cat:
+        return "包装"
+    raw = str(raw_cat).strip()
+    if any(k in raw for k in ["套盒", "礼盒", "套装", "组合装", "礼品装", "kit", "giftbox"]):
+        return "套盒"
+    elif any(k in raw.lower() for k in ["海报", "kv", "主视觉", "展板", "poster"]):
+        return "海报"
+    elif any(k in raw.lower() for k in ["物料", "易拉宝", "台卡", "展架", "堆头", "折页", "画册", "dm", "posm"]):
+        return "物料"
+    else:
+        return "包装"
+
+
+def auto_detect_category_from_name(filename):
+    """从文件名自动识别 4 大分类，未明确表明的 100% 默认兜底为「包装」"""
+    fn = filename.lower()
+    if any(k in fn for k in ["套盒", "礼盒", "套装", "组合装", "礼品装", "kit", "giftbox"]):
+        return "套盒"
+    elif any(k in fn for k in ["海报", "kv", "主视觉", "展板", "poster"]):
+        return "海报"
+    elif any(k in fn for k in ["物料", "易拉宝", "台卡", "展架", "堆头", "折页", "画册", "dm", "posm"]):
+        return "物料"
+    else:
+        return "包装"
+
+
 def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
     """将新创建的项目自动追加写入到 Excel 产品台账中"""
     if not excel_path or not os.path.exists(excel_path):
@@ -95,18 +137,22 @@ def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
         wb = openpyxl.load_workbook(excel_path)
         ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
         
-        # 查重检测
+        norm_cat = normalize_category(cat)
         norm_proj_p = proj_path.replace('\\', '/').lower().strip('/')
+        
         for r in range(2, ws.max_row + 1):
             ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
             ex_name = str(ws.cell(row=r, column=2).value or "").strip()
             if ex_name == sku or (norm_proj_p and ex_p == norm_proj_p):
-                return False # 已存在
+                # 更新可能变更的分类
+                ws.cell(row=r, column=4, value=norm_cat)
+                wb.save(excel_path)
+                return False
                 
         next_idx = ws.max_row
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        new_row = [next_idx, sku, None, cat, proj_path.replace('\\', '/'), now_str]
+        new_row = [next_idx, sku, None, norm_cat, proj_path.replace('\\', '/'), now_str]
         ws.append(new_row)
         
         try:
@@ -118,6 +164,34 @@ def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
         return True
     except Exception as e:
         print(f"Error appending project to Excel: {e}")
+        return False
+
+
+def update_project_category_in_excel(excel_path, proj_path, sku, new_cat):
+    """在 Excel 中直接更新某个项目的形态分类"""
+    if not excel_path or not os.path.exists(excel_path):
+        return False
+    try:
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
+        
+        norm_cat = normalize_category(new_cat)
+        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/') if proj_path else ""
+        
+        updated = False
+        for r in range(2, ws.max_row + 1):
+            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
+            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
+            if (norm_proj_p and ex_p == norm_proj_p) or (sku and ex_name == sku):
+                ws.cell(row=r, column=4, value=norm_cat)
+                updated = True
+                break
+                
+        if updated:
+            wb.save(excel_path)
+        return updated
+    except Exception as e:
+        print(f"Error updating category in Excel: {e}")
         return False
 
 
@@ -174,18 +248,27 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
         elif len(parts) == 1:
             if is_junk:
                 brand = fallback_brand
-                sku = f"未命名产品_{raw_name}"
+                sku = f"未命名_{raw_name}"
             else:
                 brand = fallback_brand
                 sku = parts[0]
         else:
             brand = fallback_brand
-            sku = f"未命名产品_{raw_name}"
+            sku = f"未命名_{raw_name}"
             
     return brand, sku, is_junk
 
 
 def find_project_thumbnail(proj_path):
+    """
+    【Beauty 优先封面规则】：
+    1. 优先捕获 04_Renders_通道输出 或主目录下带 Beauty/成品/主图/正面 的最新 PNG/JPG 渲染图；
+    2. 自动过滤 Mask、Alpha、Normal、Depth 等通道图；
+    3. 若暂无渲染图，返回 None (界面展示优雅的待渲染占位卡片)。
+    """
+    if not proj_path or not os.path.exists(proj_path):
+        return None
+
     render_dirs = [
         os.path.join(proj_path, "04_Renders_通道输出"),
         os.path.join(proj_path, "05_Delivery_最终交付"),
@@ -201,26 +284,40 @@ def find_project_thumbnail(proj_path):
                     candidates.extend(glob.glob(os.path.join(rdir, ext)))
             except Exception:
                 pass
+                
     if candidates:
-        beauty_imgs = [c for c in candidates if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_"])]
+        # 1. 优先 Beauty / 成品 / 主图 / Camera 关键词
+        beauty_imgs = [
+            c for c in candidates 
+            if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_", "main", "render"])
+            and not any(bad in os.path.basename(c).lower() for bad in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness", "ao_"])
+        ]
         if beauty_imgs:
             try:
                 beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
                 return beauty_imgs[0]
             except Exception:
                 return beauty_imgs[0]
-        filtered = [c for c in candidates if not any(k in os.path.basename(c).lower() for k in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness"])]
+                
+        # 2. 排除通道图后的普通图片
+        filtered = [
+            c for c in candidates 
+            if not any(bad in os.path.basename(c).lower() for bad in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness", "ao_", "diffuse"])
+        ]
         if filtered:
             try:
                 filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
                 return filtered[0]
             except Exception:
                 return filtered[0]
+                
+        # 3. 兜底最新图片
         try:
             candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
             return candidates[0]
         except Exception:
             return candidates[0]
+            
     return None
 
 
@@ -274,7 +371,7 @@ def parse_and_cache_excel(excel_path):
 
         for r in range(2, sheet.max_row + 1):
             name = sheet.cell(row=r, column=2).value
-            cat = sheet.cell(row=r, column=4).value or "未分类"
+            raw_cat = sheet.cell(row=r, column=4).value or "包装"
             path = sheet.cell(row=r, column=5).value or ""
             time_str = sheet.cell(row=r, column=6).value or ""
 
@@ -294,7 +391,7 @@ def parse_and_cache_excel(excel_path):
                 "source": "excel",
                 "brand": brand,
                 "sku": str(name).strip(),
-                "cat": str(cat).strip(),
+                "cat": normalize_category(raw_cat),
                 "path": norm_path,
                 "thumbnail": thumb,
                 "time": str(time_str),
@@ -342,7 +439,7 @@ def scan_workspace_projects(root_dir):
                         "source": "disk",
                         "brand": entry,
                         "sku": sku,
-                        "cat": "三维项目",
+                        "cat": auto_detect_category_from_name(sku),
                         "path": sku_p,
                         "thumbnail": thumb,
                         "time": "",
@@ -379,13 +476,14 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
         if matched_disk_proj:
             dp = matched_disk_proj
             handled_disk_keys.add(dp["path"].lower().replace("/", "\\").strip("\\"))
+            # 扫描结果优先！采用硬盘最新渲染的 Beauty 图
             thumb = dp["thumbnail"] if dp["thumbnail"] else ep["thumbnail"]
             mtime = dp["mtime"] if dp["mtime"] > 0 else ep["mtime"]
             merged.append({
                 "source": "disk_prioritized",
                 "brand": dp["brand"],
                 "sku": dp["sku"],
-                "cat": ep.get("cat", "三维项目"),
+                "cat": normalize_category(ep.get("cat", dp.get("cat", "包装"))),
                 "path": dp["path"],
                 "thumbnail": thumb,
                 "time": ep.get("time", ""),
@@ -406,8 +504,8 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("📦 包装设计与视觉资产中枢 (Packaging Studio Suite v4.1)")
-        self.root.geometry("1200x800")
+        self.root.title("📦 包装设计与视觉资产中枢 (Packaging Studio Suite v4.5)")
+        self.root.geometry("1220x800")
         self.root.minsize(980, 640)
         
         self.cfg = load_config()
@@ -421,7 +519,7 @@ class PackagingStudioSuite:
         # 归档页变量
         self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
         self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", self.curated_brands[0]))
-        self.current_cat_var = tk.StringVar(value="瓶装") # 默认归档分类
+        self.current_cat_var = tk.StringVar(value=self.cfg.get("default_category", "包装"))
         self.auto_create_blend_var = tk.BooleanVar(value=self.cfg.get("auto_create_blend", True))
         self.auto_open_blender_var = tk.BooleanVar(value=self.cfg.get("auto_open_blender", True))
         self.auto_append_excel_var = tk.BooleanVar(value=self.cfg.get("auto_append_to_excel", True))
@@ -454,7 +552,7 @@ class PackagingStudioSuite:
 
     def build_ui(self):
         style = ttk.Style()
-        style.configure("TNotebook.Tab", font=("Microsoft YaHei", 10, "bold"), padding=[16, 6])
+        style.configure("TNotebook.Tab", font=("Microsoft YaHei", 10, "bold"), padding=[18, 6])
         
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
@@ -553,7 +651,7 @@ class PackagingStudioSuite:
 
     # ---------------- 页面 2: 微信文件分拣归档 ----------------
     def build_organizer_ui(self, parent):
-        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户与形态分类 ", padding=10)
+        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户与形态分类设置 ", padding=10)
         top_frame.pack(fill=tk.X, padx=15, pady=8)
         
         row_dir = ttk.Frame(top_frame)
@@ -582,18 +680,19 @@ class PackagingStudioSuite:
             font=("Microsoft YaHei", 9)
         )
         self.brand_combo_org.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(row_brand, text="➕ 新增客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(row_brand, text="➕ 新增客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 10))
         
-        ttk.Label(row_brand, text="包装形态:").pack(side=tk.LEFT, padx=(8, 4))
+        ttk.Label(row_brand, text="🏷️ 默认业务形态:").pack(side=tk.LEFT, padx=(6, 4))
         self.cat_combo_org = ttk.Combobox(
             row_brand,
             textvariable=self.current_cat_var,
-            values=["瓶装", "袋装", "盒装", "套盒", "软管", "罐装", "通用"],
+            values=VALID_CATEGORIES,
             state="readonly",
             width=10,
             font=("Microsoft YaHei", 9)
         )
         self.cat_combo_org.pack(side=tk.LEFT, padx=(0, 8))
+        self.cat_combo_org.bind("<<ComboboxSelected>>", lambda e: self.save_cfg_all())
 
         # 2. 自动化存盘与同步选项
         b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与 Excel 双向同步设置 ", padding=8)
@@ -606,7 +705,7 @@ class PackagingStudioSuite:
         ttk.Button(row_b, text="📁 设置母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
 
         # 3. 待处理列表
-        list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的微信源文件 (自动剔除 (1)(2) 并智能查重，双击可编辑) ", padding=10)
+        list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的微信源文件 (自动识别 4 大分类，双击可自由修改) ", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 6))
         
         cols = ("file", "brand", "sku", "cat", "target_dir", "status")
@@ -614,14 +713,14 @@ class PackagingStudioSuite:
         self.tree_org.heading("file", text="微信接收的文件名")
         self.tree_org.heading("brand", text="归属客户")
         self.tree_org.heading("sku", text="核心SKU名")
-        self.tree_org.heading("cat", text="形态分类")
+        self.tree_org.heading("cat", text="业务分类")
         self.tree_org.heading("target_dir", text="目标归档目录")
         self.tree_org.heading("status", text="状态")
         
-        self.tree_org.column("file", width=200, anchor="w")
+        self.tree_org.column("file", width=210, anchor="w")
         self.tree_org.column("brand", width=100, anchor="center")
         self.tree_org.column("sku", width=160, anchor="w")
-        self.tree_org.column("cat", width=80, anchor="center")
+        self.tree_org.column("cat", width=90, anchor="center")
         self.tree_org.column("target_dir", width=180, anchor="w")
         self.tree_org.column("status", width=80, anchor="center")
         
@@ -635,7 +734,7 @@ class PackagingStudioSuite:
         btn_frame = ttk.Frame(parent, padding=2)
         btn_frame.pack(fill=tk.X, padx=15, pady=(0, 6))
         ttk.Button(btn_frame, text="➕ 添加 AI / 源文件...", command=self.browse_files_for_org).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="✏️ 批量应用当前客户与分类", command=self.apply_current_brand_to_all_org).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="✏️ 批量应用当前客户与分类", command=self.apply_current_brand_and_cat_to_all_org).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="❌ 移除选中", command=self.remove_selected_org).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="🧹 清空", command=self.clear_org).pack(side=tk.LEFT)
 
@@ -660,6 +759,7 @@ class PackagingStudioSuite:
     def save_cfg_all(self):
         self.cfg["current_workspace"] = self.current_workspace_var.get()
         self.cfg["current_brand"] = self.current_brand_var.get()
+        self.cfg["default_category"] = self.current_cat_var.get()
         self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
         self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
         self.cfg["auto_append_to_excel"] = self.auto_append_excel_var.get()
@@ -702,7 +802,6 @@ class PackagingStudioSuite:
 
     def add_files_to_organizer(self, filepaths):
         cur_brand = self.current_brand_var.get().strip()
-        cur_cat = self.current_cat_var.get().strip()
         for fp in filepaths:
             fp = os.path.abspath(fp)
             if not os.path.exists(fp) or not os.path.isfile(fp):
@@ -710,12 +809,13 @@ class PackagingStudioSuite:
             if any(item['filepath'] == fp for item in self.files_to_organize):
                 continue
             brand, sku, is_junk = clean_and_parse_filename(fp, fallback_brand=cur_brand, valid_brands=self.curated_brands)
+            detected_cat = auto_detect_category_from_name(os.path.basename(fp))
             item = {
                 "filepath": fp,
                 "filename": os.path.basename(fp),
                 "brand": brand,
                 "sku": sku,
-                "cat": cur_cat,
+                "cat": detected_cat,
                 "is_junk": is_junk,
                 "md5": get_file_md5(fp)
             }
@@ -727,7 +827,7 @@ class PackagingStudioSuite:
         for item in self.files_to_organize:
             brand = item["brand"]
             sku = item["sku"]
-            cat = item.get("cat", "瓶装")
+            cat = item.get("cat", "包装")
             target_proj = f"{brand}/{sku}" if brand else sku
             status = "⚠️需确认" if item["is_junk"] else "✅就绪"
             self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, cat, target_proj, status))
@@ -737,7 +837,7 @@ class PackagingStudioSuite:
         if files:
             self.add_files_to_organizer(files)
 
-    def apply_current_brand_to_all_org(self):
+    def apply_current_brand_and_cat_to_all_org(self):
         cur_brand = self.current_brand_var.get().strip()
         cur_cat = self.current_cat_var.get().strip()
         for item in self.files_to_organize:
@@ -767,22 +867,22 @@ class PackagingStudioSuite:
         
         edit_win = tk.Toplevel(self.root)
         edit_win.title("✏️ 快速修改客户、分类与项目名")
-        edit_win.geometry("420x280")
+        edit_win.geometry("430x290")
         edit_win.transient(self.root)
         edit_win.grab_set()
         
-        ttk.Label(edit_win, text=f"原始文件: {cur_item['filename']}", wraplength=380).pack(padx=15, pady=10, anchor="w")
+        ttk.Label(edit_win, text=f"原始文件: {cur_item['filename']}", wraplength=390).pack(padx=15, pady=10, anchor="w")
         b_var = tk.StringVar(value=cur_item["brand"])
         s_var = tk.StringVar(value=cur_item["sku"])
-        c_var = tk.StringVar(value=cur_item.get("cat", "瓶装"))
+        c_var = tk.StringVar(value=cur_item.get("cat", "包装"))
         
         f_in = ttk.Frame(edit_win)
         f_in.pack(fill=tk.X, padx=15, pady=5)
         ttk.Label(f_in, text="归属客户:").grid(row=0, column=0, sticky="w", pady=4)
         ttk.Combobox(f_in, textvariable=b_var, values=self.curated_brands, width=24).grid(row=0, column=1, sticky="w", pady=4)
         
-        ttk.Label(f_in, text="包装形态:").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Combobox(f_in, textvariable=c_var, values=["瓶装", "袋装", "盒装", "套盒", "软管", "罐装", "通用"], width=24).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(f_in, text="业务分类:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Combobox(f_in, textvariable=c_var, values=VALID_CATEGORIES, width=24).grid(row=1, column=1, sticky="w", pady=4)
         
         ttk.Label(f_in, text="核心SKU名:").grid(row=2, column=0, sticky="w", pady=4)
         ttk.Entry(f_in, textvariable=s_var, width=26).grid(row=2, column=1, sticky="w", pady=4)
@@ -790,7 +890,7 @@ class PackagingStudioSuite:
         def save_edit():
             cur_item["brand"] = b_var.get().strip()
             cur_item["sku"] = s_var.get().strip()
-            cur_item["cat"] = c_var.get().strip()
+            cur_item["cat"] = normalize_category(c_var.get().strip())
             cur_item["is_junk"] = False
             self.refresh_organizer_table()
             edit_win.destroy()
@@ -831,7 +931,7 @@ class PackagingStudioSuite:
         for item in self.files_to_organize:
             brand = item["brand"].strip()
             sku = item["sku"].strip() if item["sku"].strip() else os.path.splitext(item["filename"])[0]
-            cat = item.get("cat", "瓶装")
+            cat = normalize_category(item.get("cat", "包装"))
             proj_dir = os.path.join(root_dir, brand, sku) if brand else os.path.join(root_dir, sku)
             
             for sub in subfolders:
@@ -963,15 +1063,19 @@ class PackagingStudioSuite:
         else:
             self.current_display_list = self.merged_projects
             
-        cat_counts = {}
+        cat_counts = {c: 0 for c in VALID_CATEGORIES}
         for p in self.current_display_list:
-            c = p.get("cat", "未分类")
+            c = normalize_category(p.get("cat", "包装"))
+            p["cat"] = c
             cat_counts[c] = cat_counts.get(c, 0) + 1
             
         self.category_listbox.delete(0, tk.END)
         self.category_listbox.insert(tk.END, f"✨ 全部形态 ({len(self.current_display_list)})")
-        for c in sorted(cat_counts.keys()):
-            self.category_listbox.insert(tk.END, f"📦 {c} ({cat_counts[c]})")
+        
+        cat_icons = {"包装": "📦", "套盒": "🎁", "海报": "🖼️", "物料": "📑"}
+        for c in VALID_CATEGORIES:
+            icon = cat_icons.get(c, "🏷️")
+            self.category_listbox.insert(tk.END, f"{icon} {c} ({cat_counts.get(c, 0)})")
             
         self.category_listbox.select_set(0)
         self.selected_category_var.set("全部")
@@ -999,9 +1103,11 @@ class PackagingStudioSuite:
         if idx == 0:
             self.selected_category_var.set("全部")
         else:
-            m = re.search(r"📦\s*(.*?)\s*\(\d+\)", text)
+            m = re.search(r"[\u4e00-\u9fa5]+", text)
             if m:
-                self.selected_category_var.set(m.group(1))
+                clean_name = m.group(0)
+                if clean_name in VALID_CATEGORIES:
+                    self.selected_category_var.set(clean_name)
         self.current_page = 0
         self.apply_filter()
 
@@ -1011,9 +1117,10 @@ class PackagingStudioSuite:
         
         self.filtered_projects = []
         for p in self.current_display_list:
-            if cat != "全部" and p.get("cat") != cat:
+            p_cat = normalize_category(p.get("cat", "包装"))
+            if cat != "全部" and p_cat != cat:
                 continue
-            if kw and (kw not in p["sku"].lower() and kw not in p.get("brand", "").lower() and kw not in p.get("cat", "").lower()):
+            if kw and (kw not in p["sku"].lower() and kw not in p.get("brand", "").lower() and kw not in p_cat.lower()):
                 continue
             self.filtered_projects.append(p)
             
@@ -1073,9 +1180,9 @@ class PackagingStudioSuite:
         cache_key = "placeholder"
         if cache_key in self.thumb_cache:
             return self.thumb_cache[cache_key]
-        im = Image.new("RGBA", size, (240, 243, 246, 255))
+        im = Image.new("RGBA", size, (244, 246, 248, 255))
         draw = ImageDraw.Draw(im)
-        draw.text((size[0]//2 - 35, size[1]//2 - 10), "📦 暂无渲染图", fill=(160, 170, 185, 255))
+        draw.text((size[0]//2 - 38, size[1]//2 - 10), "📦 待渲染工程", fill=(150, 160, 175, 255))
         tk_img = ImageTk.PhotoImage(im)
         self.thumb_cache[cache_key] = tk_img
         return tk_img
@@ -1117,7 +1224,16 @@ class PackagingStudioSuite:
             badge_row = tk.Frame(meta_frame, bg="white")
             badge_row.pack(fill=tk.X, pady=(0, 2))
             
-            cat_tag = tk.Label(badge_row, text=proj.get("cat", "包装"), font=("Microsoft YaHei", 8, "bold"), bg="#E1EFFF", fg="#005A9E", padx=4, pady=1)
+            cat_val = normalize_category(proj.get("cat", "包装"))
+            cat_colors = {
+                "包装": ("#E1EFFF", "#005A9E"),
+                "套盒": ("#FEF3C7", "#B45309"),
+                "海报": ("#EDE9FE", "#6D28D9"),
+                "物料": ("#ECFDF5", "#047857")
+            }
+            bg_c, fg_c = cat_colors.get(cat_val, ("#E1EFFF", "#005A9E"))
+            
+            cat_tag = tk.Label(badge_row, text=cat_val, font=("Microsoft YaHei", 8, "bold"), bg=bg_c, fg=fg_c, padx=4, pady=1)
             cat_tag.pack(side=tk.LEFT, padx=(0, 4))
             
             if proj.get("brand"):
@@ -1131,7 +1247,7 @@ class PackagingStudioSuite:
             action_frame.pack(fill=tk.X)
             
             has_path = bool(proj.get("path") and os.path.exists(proj["path"]))
-            btn_open = tk.Button(action_frame, text="📁 打开文件夹" if has_path else "📁 路径未就绪", font=("Microsoft YaHei", 8), bg="#F0F0F0" if has_path else "#FAFAFA", fg="#222" if has_path else "#999", relief=tk.FLAT, command=lambda p=proj.get("path"): self.open_folder(p))
+            btn_open = tk.Button(action_frame, text="📁 文件夹" if has_path else "📁 路径未就绪", font=("Microsoft YaHei", 8), bg="#F0F0F0" if has_path else "#FAFAFA", fg="#222" if has_path else "#999", relief=tk.FLAT, command=lambda p=proj.get("path"): self.open_folder(p))
             btn_open.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
             
             btn_blend = tk.Button(action_frame, text="🚀 3D工程", font=("Microsoft YaHei", 8), bg="#EBF5FB", fg="#005A9E", relief=tk.FLAT, command=lambda p=proj.get("path"): self.launch_blend(p))
@@ -1171,14 +1287,40 @@ class PackagingStudioSuite:
     def show_context_menu(self, event, proj):
         menu = tk.Menu(self.root, tearoff=0)
         p = proj.get("path", "")
-        menu.add_command(label=f"📁 打开项目文件夹: {proj['sku']}", command=lambda: self.open_folder(p))
-        menu.add_command(label="🚀 启动 Blender 打开 3D 工程", command=lambda: self.launch_blend(p))
+        sku = proj.get("sku", "")
+        
+        menu.add_command(label=f"📁 打开文件夹: {sku}", command=lambda: self.open_folder(p))
+        menu.add_command(label="🚀 Blender 打开 3D 工程", command=lambda: self.launch_blend(p))
         if p and os.path.exists(p):
-            menu.add_command(label="🎨 打开 01_Design 平面原稿", command=lambda: self.open_folder(os.path.join(p, "01_Design_平面原稿")))
+            menu.add_command(label="🎨 查看 01_Design 平面原稿", command=lambda: self.open_folder(os.path.join(p, "01_Design_平面原稿")))
             menu.add_command(label="🖼️ 查看 04_Renders 渲染大图", command=lambda: self.open_folder(os.path.join(p, "04_Renders_通道输出")))
+            
         menu.add_separator()
-        menu.add_command(label="📋 复制项目完整路径", command=lambda: self.copy_path_to_clipboard(p))
+        
+        # 形态分类修改子菜单
+        cat_submenu = tk.Menu(menu, tearoff=0)
+        for cat_item in VALID_CATEGORIES:
+            cat_submenu.add_command(
+                label=f"设为：{cat_item}",
+                command=lambda c=cat_item, pr=proj: self.change_project_category(pr, c)
+            )
+        menu.add_cascade(label=f"🏷️ 修改业务形态 (当前: {proj.get('cat', '包装')})", menu=cat_submenu)
+        
+        menu.add_separator()
+        menu.add_command(label="📋 复制完整物理路径", command=lambda: self.copy_path_to_clipboard(p))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def change_project_category(self, proj, new_cat):
+        new_cat = normalize_category(new_cat)
+        proj["cat"] = new_cat
+        ex_path = self.excel_path_var.get().strip()
+        
+        # 实时同步写入 Excel
+        update_project_category_in_excel(ex_path, proj.get("path"), proj.get("sku"), new_cat)
+        
+        self.update_active_dataset()
+        self.sync_status_lbl.config(text=f"✅ 已将 [{proj['sku']}] 改为 【{new_cat}】 并同步 Excel！", bg="#ECFDF5", fg="#059669")
+        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 扫描优先实时同步已就绪", bg="#ECFDF5", fg="#059669"))
 
     def copy_path_to_clipboard(self, text):
         self.root.clipboard_clear()
@@ -1193,12 +1335,14 @@ class PackagingStudioSuite:
             thumb_rel = p.get("thumbnail") or ""
             thumb_src = "file:///" + thumb_rel.replace("\\", "/") if (thumb_rel and os.path.exists(thumb_rel)) else "https://via.placeholder.com/300x300?text=No+Render"
             folder_uri = "file:///" + p["path"].replace("\\", "/") if p.get("path") else "#"
+            cat_name = normalize_category(p.get("cat", "包装"))
+            
             cards_html.append(f"""
             <div class="card" onclick="window.open('{folder_uri}')">
                 <div class="thumb-container"><img src="{thumb_src}" alt="{p['sku']}" loading="lazy"></div>
                 <div class="meta">
                     <div style="display:flex; gap:6px; margin-bottom:6px;">
-                        <span class="badge" style="background:#0369a1;">{p.get('cat', '包装')}</span>
+                        <span class="badge" style="background:#0369a1;">{cat_name}</span>
                         <span class="badge" style="background:#475569;">{p.get('brand', '')}</span>
                     </div>
                     <h3 class="title">{p['sku']}</h3>
