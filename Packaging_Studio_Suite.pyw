@@ -1,19 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与资产综合中枢 (Packaging Studio Suite - v4.0 终极合一版)
-二合一全流程架构：
-1. 【默认启动 -> 🖼️ 视觉资产看板】：
-   - 双击直接进入 Eagle 风格的高清渲染资产画廊；
-   - 智能融合 Excel 台账与本地硬盘实时扫描 (扫描结果绝对优先)；
-   - 支持形态分类、品牌筛选、快速搜索与一键直达 Blender / 文件夹。
-
-2. 【右键发送到 / 拖拽文件 -> 📥 微信文件归档开工】：
-   - 微信收到 .ai 文件，右键【发送到】自动跳转至分拣归档页；
-   - 自动剥离 (1) (2) 增量后缀并秒级查重，归拢至唯一项目；
-   - 一键生成 5 级工业标准目录，自动克隆 .blend 并启动 Blender 开工！
-
-3. 【单窗口自由切换】：
-   - 顶部提供 Tab 标签页，随时在【资产看板】与【文件归档】之间无缝切换。
+包装设计与资产综合中枢 (Packaging Studio Suite - v4.1 自动双向追加同步版)
+新增核心特性：
+1. 【新项目全自动追加写入 Excel】：
+   - 微信收到文件一键归档时，自动将新产品名、分类(瓶装/袋装/盒装/套盒)、路径与时间追加写入《产品列表.xlsx》！
+2. 【资产看板实时自动上架】：
+   - Excel 追加写入后，资产管理器 0.1 秒自动感应，新卡片瞬间上架展示！
+3. 【智能防重复检测】：
+   - 自动检测已有产品，绝不在 Excel 中产生重复行。
 """
 
 import os
@@ -22,6 +16,7 @@ import re
 import json
 import glob
 import zipfile
+import datetime
 import webbrowser
 import subprocess
 import xml.etree.ElementTree as ET
@@ -67,7 +62,8 @@ DEFAULT_CONFIG = {
     "current_brand": "柏缇",
     "auto_create_blend": True,
     "auto_open_blender": True,
-    "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else ""
+    "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
+    "auto_append_to_excel": True
 }
 
 def load_config():
@@ -89,6 +85,40 @@ def save_config(cfg):
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
+    """将新创建的项目自动追加写入到 Excel 产品台账中"""
+    if not excel_path or not os.path.exists(excel_path):
+        return False
+    try:
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
+        
+        # 查重检测
+        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/')
+        for r in range(2, ws.max_row + 1):
+            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
+            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
+            if ex_name == sku or (norm_proj_p and ex_p == norm_proj_p):
+                return False # 已存在
+                
+        next_idx = ws.max_row
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        new_row = [next_idx, sku, None, cat, proj_path.replace('\\', '/'), now_str]
+        ws.append(new_row)
+        
+        try:
+            ws.row_dimensions[ws.max_row].height = 40
+        except Exception:
+            pass
+            
+        wb.save(excel_path)
+        return True
+    except Exception as e:
+        print(f"Error appending project to Excel: {e}")
+        return False
 
 
 def get_file_md5(filepath):
@@ -376,7 +406,7 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("📦 包装设计与视觉资产中枢 (Packaging Studio Suite)")
+        self.root.title("📦 包装设计与视觉资产中枢 (Packaging Studio Suite v4.1)")
         self.root.geometry("1200x800")
         self.root.minsize(980, 640)
         
@@ -391,8 +421,10 @@ class PackagingStudioSuite:
         # 归档页变量
         self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
         self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", self.curated_brands[0]))
+        self.current_cat_var = tk.StringVar(value="瓶装") # 默认归档分类
         self.auto_create_blend_var = tk.BooleanVar(value=self.cfg.get("auto_create_blend", True))
         self.auto_open_blender_var = tk.BooleanVar(value=self.cfg.get("auto_open_blender", True))
+        self.auto_append_excel_var = tk.BooleanVar(value=self.cfg.get("auto_append_to_excel", True))
         self.files_to_organize = []
         
         # 资产看板页变量
@@ -414,15 +446,13 @@ class PackagingStudioSuite:
         self.load_all_asset_data()
         self.start_excel_auto_sync_watcher()
         
-        # 智能路由：若带文件参数启动 (SendTo / 拖拽)，自动切到归档页
         if initial_files:
-            self.notebook.select(1) # 切换到归档 Tab
+            self.notebook.select(1)
             self.add_files_to_organizer(initial_files)
         else:
-            self.notebook.select(0) # 默认打开资产看板 Tab
+            self.notebook.select(0)
 
     def build_ui(self):
-        # 顶部大 Tab 切换导航
         style = ttk.Style()
         style.configure("TNotebook.Tab", font=("Microsoft YaHei", 10, "bold"), padding=[16, 6])
         
@@ -464,7 +494,7 @@ class PackagingStudioSuite:
         ttk.Button(top_bar, text="📊 指定 Excel...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(top_bar, text="🔄 刷新", command=self.load_all_asset_data).pack(side=tk.LEFT, padx=(0, 6))
         
-        self.sync_status_lbl = tk.Label(top_bar, text="🟢 扫描优先去重已就绪", font=("Microsoft YaHei", 8), fg="#059669", bg="#ECFDF5", padx=6, pady=2)
+        self.sync_status_lbl = tk.Label(top_bar, text="🟢 扫描优先实时同步已就绪", font=("Microsoft YaHei", 8), fg="#059669", bg="#ECFDF5", padx=6, pady=2)
         self.sync_status_lbl.pack(side=tk.LEFT, padx=(6, 0))
         
         ttk.Button(top_bar, text="🌐 导出网页画廊 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
@@ -523,8 +553,7 @@ class PackagingStudioSuite:
 
     # ---------------- 页面 2: 微信文件分拣归档 ----------------
     def build_organizer_ui(self, parent):
-        # 1. 顶部工作盘与品牌
-        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘与指定客户 ", padding=10)
+        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户与形态分类 ", padding=10)
         top_frame.pack(fill=tk.X, padx=15, pady=8)
         
         row_dir = ttk.Frame(top_frame)
@@ -549,39 +578,52 @@ class PackagingStudioSuite:
             textvariable=self.current_brand_var,
             values=self.curated_brands,
             state="readonly",
-            width=20,
+            width=16,
             font=("Microsoft YaHei", 9)
         )
         self.brand_combo_org.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(row_brand, text="➕ 添加新客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(row_brand, text="📁 点选客户文件夹...", command=self.pick_brand_folder).pack(side=tk.LEFT)
+        ttk.Button(row_brand, text="➕ 新增客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 6))
+        
+        ttk.Label(row_brand, text="包装形态:").pack(side=tk.LEFT, padx=(8, 4))
+        self.cat_combo_org = ttk.Combobox(
+            row_brand,
+            textvariable=self.current_cat_var,
+            values=["瓶装", "袋装", "盒装", "套盒", "软管", "罐装", "通用"],
+            state="readonly",
+            width=10,
+            font=("Microsoft YaHei", 9)
+        )
+        self.cat_combo_org.pack(side=tk.LEFT, padx=(0, 8))
 
-        # 2. Blender 自动化选项
-        b_frame = ttk.LabelFrame(parent, text=" ⚡ Blender 首次创建自动化 ", padding=8)
+        # 2. 自动化存盘与同步选项
+        b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与 Excel 双向同步设置 ", padding=8)
         b_frame.pack(fill=tk.X, padx=15, pady=(0, 6))
         row_b = ttk.Frame(b_frame)
         row_b.pack(fill=tk.X)
         ttk.Checkbutton(row_b, text="✨ 自动生成对应 .blend 工程", variable=self.auto_create_blend_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Checkbutton(row_b, text="🚀 自动启动 Blender 打开工程", variable=self.auto_open_blender_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Button(row_b, text="📁 设置默认包装母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
+        ttk.Checkbutton(row_b, text="🚀 自动启动 Blender 打开工程", variable=self.auto_open_blender_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Checkbutton(row_b, text="📊 归档时自动将新产品追加录入《产品列表.xlsx》", variable=self.auto_append_excel_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Button(row_b, text="📁 设置母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
 
         # 3. 待处理列表
         list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的微信源文件 (自动剔除 (1)(2) 并智能查重，双击可编辑) ", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 6))
         
-        cols = ("file", "brand", "sku", "target_dir", "status")
+        cols = ("file", "brand", "sku", "cat", "target_dir", "status")
         self.tree_org = ttk.Treeview(list_frame, columns=cols, show="headings", selectmode="extended")
         self.tree_org.heading("file", text="微信接收的文件名")
-        self.tree_org.heading("brand", text="归属客户/品牌")
-        self.tree_org.heading("sku", text="核心项目/SKU名")
+        self.tree_org.heading("brand", text="归属客户")
+        self.tree_org.heading("sku", text="核心SKU名")
+        self.tree_org.heading("cat", text="形态分类")
         self.tree_org.heading("target_dir", text="目标归档目录")
         self.tree_org.heading("status", text="状态")
         
-        self.tree_org.column("file", width=220, anchor="w")
-        self.tree_org.column("brand", width=110, anchor="center")
-        self.tree_org.column("sku", width=180, anchor="w")
+        self.tree_org.column("file", width=200, anchor="w")
+        self.tree_org.column("brand", width=100, anchor="center")
+        self.tree_org.column("sku", width=160, anchor="w")
+        self.tree_org.column("cat", width=80, anchor="center")
         self.tree_org.column("target_dir", width=180, anchor="w")
-        self.tree_org.column("status", width=90, anchor="center")
+        self.tree_org.column("status", width=80, anchor="center")
         
         scroll_org = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree_org.yview)
         self.tree_org.configure(yscrollcommand=scroll_org.set)
@@ -593,7 +635,7 @@ class PackagingStudioSuite:
         btn_frame = ttk.Frame(parent, padding=2)
         btn_frame.pack(fill=tk.X, padx=15, pady=(0, 6))
         ttk.Button(btn_frame, text="➕ 添加 AI / 源文件...", command=self.browse_files_for_org).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="✏️ 批量应用当前客户", command=self.apply_current_brand_to_all_org).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="✏️ 批量应用当前客户与分类", command=self.apply_current_brand_to_all_org).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="❌ 移除选中", command=self.remove_selected_org).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="🧹 清空", command=self.clear_org).pack(side=tk.LEFT)
 
@@ -602,7 +644,7 @@ class PackagingStudioSuite:
         exec_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         btn_exec = tk.Button(
             exec_frame,
-            text="🚀 【 一键创建工业级标准项目、生成 .blend 并自动开工 】",
+            text="🚀 【 一键创建工业级标准项目、同步写入 Excel 并自动开工 】",
             font=("Microsoft YaHei", 11, "bold"),
             bg="#0078D7",
             fg="white",
@@ -620,6 +662,7 @@ class PackagingStudioSuite:
         self.cfg["current_brand"] = self.current_brand_var.get()
         self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
         self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
+        self.cfg["auto_append_to_excel"] = self.auto_append_excel_var.get()
         save_config(self.cfg)
 
     def add_workspace(self):
@@ -650,21 +693,6 @@ class PackagingStudioSuite:
                 if cur_ws and os.path.exists(cur_ws):
                     os.makedirs(os.path.join(cur_ws, name), exist_ok=True)
 
-    def pick_brand_folder(self):
-        cur_ws = self.current_workspace_var.get().strip()
-        initial = cur_ws if os.path.exists(cur_ws) else None
-        d = filedialog.askdirectory(title="点选指定的客户/品牌文件夹", initialdir=initial)
-        if d:
-            brand_name = os.path.basename(os.path.normpath(d))
-            if brand_name:
-                if brand_name not in self.curated_brands:
-                    self.curated_brands.insert(0, brand_name)
-                    self.cfg["curated_brands"] = self.curated_brands
-                self.cfg["current_brand"] = brand_name
-                save_config(self.cfg)
-                self.current_brand_var.set(brand_name)
-                self.brand_combo_org["values"] = self.curated_brands
-
     def set_custom_template(self):
         f = filedialog.askopenfilename(title="选择你的默认包装 Blender 母版工程 (.blend)", filetypes=[("Blender 工程", "*.blend"), ("所有文件", "*.*")])
         if f:
@@ -674,6 +702,7 @@ class PackagingStudioSuite:
 
     def add_files_to_organizer(self, filepaths):
         cur_brand = self.current_brand_var.get().strip()
+        cur_cat = self.current_cat_var.get().strip()
         for fp in filepaths:
             fp = os.path.abspath(fp)
             if not os.path.exists(fp) or not os.path.isfile(fp):
@@ -686,6 +715,7 @@ class PackagingStudioSuite:
                 "filename": os.path.basename(fp),
                 "brand": brand,
                 "sku": sku,
+                "cat": cur_cat,
                 "is_junk": is_junk,
                 "md5": get_file_md5(fp)
             }
@@ -697,9 +727,10 @@ class PackagingStudioSuite:
         for item in self.files_to_organize:
             brand = item["brand"]
             sku = item["sku"]
+            cat = item.get("cat", "瓶装")
             target_proj = f"{brand}/{sku}" if brand else sku
             status = "⚠️需确认" if item["is_junk"] else "✅就绪"
-            self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, target_proj, status))
+            self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, cat, target_proj, status))
 
     def browse_files_for_org(self):
         files = filedialog.askopenfilenames(title="选择微信接收的 AI / 包装文件", filetypes=[("包装设计文件", "*.ai;*.pdf;*.psd;*.zip;*.rar;*.eps"), ("所有文件", "*.*")])
@@ -708,10 +739,12 @@ class PackagingStudioSuite:
 
     def apply_current_brand_to_all_org(self):
         cur_brand = self.current_brand_var.get().strip()
-        if not cur_brand:
-            return
+        cur_cat = self.current_cat_var.get().strip()
         for item in self.files_to_organize:
-            item["brand"] = cur_brand
+            if cur_brand:
+                item["brand"] = cur_brand
+            if cur_cat:
+                item["cat"] = cur_cat
         self.refresh_organizer_table()
 
     def remove_selected_org(self):
@@ -733,30 +766,36 @@ class PackagingStudioSuite:
         cur_item = self.files_to_organize[idx]
         
         edit_win = tk.Toplevel(self.root)
-        edit_win.title("✏️ 快速修改客户与项目名")
-        edit_win.geometry("420x240")
+        edit_win.title("✏️ 快速修改客户、分类与项目名")
+        edit_win.geometry("420x280")
         edit_win.transient(self.root)
         edit_win.grab_set()
         
         ttk.Label(edit_win, text=f"原始文件: {cur_item['filename']}", wraplength=380).pack(padx=15, pady=10, anchor="w")
         b_var = tk.StringVar(value=cur_item["brand"])
         s_var = tk.StringVar(value=cur_item["sku"])
+        c_var = tk.StringVar(value=cur_item.get("cat", "瓶装"))
         
         f_in = ttk.Frame(edit_win)
         f_in.pack(fill=tk.X, padx=15, pady=5)
-        ttk.Label(f_in, text="归属客户:").grid(row=0, column=0, sticky="w", pady=5)
-        ttk.Combobox(f_in, textvariable=b_var, values=self.curated_brands, width=26).grid(row=0, column=1, sticky="w", pady=5)
-        ttk.Label(f_in, text="核心SKU名:").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Entry(f_in, textvariable=s_var, width=28).grid(row=1, column=1, sticky="w", pady=5)
+        ttk.Label(f_in, text="归属客户:").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Combobox(f_in, textvariable=b_var, values=self.curated_brands, width=24).grid(row=0, column=1, sticky="w", pady=4)
+        
+        ttk.Label(f_in, text="包装形态:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Combobox(f_in, textvariable=c_var, values=["瓶装", "袋装", "盒装", "套盒", "软管", "罐装", "通用"], width=24).grid(row=1, column=1, sticky="w", pady=4)
+        
+        ttk.Label(f_in, text="核心SKU名:").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(f_in, textvariable=s_var, width=26).grid(row=2, column=1, sticky="w", pady=4)
         
         def save_edit():
             cur_item["brand"] = b_var.get().strip()
             cur_item["sku"] = s_var.get().strip()
+            cur_item["cat"] = c_var.get().strip()
             cur_item["is_junk"] = False
             self.refresh_organizer_table()
             edit_win.destroy()
             
-        ttk.Button(edit_win, text="保存 (Enter)", command=save_edit).pack(pady=12)
+        ttk.Button(edit_win, text="保存修改 (Enter)", command=save_edit).pack(pady=12)
         edit_win.bind("<Return>", lambda e: save_edit())
 
     def execute_organize_flow(self):
@@ -779,16 +818,20 @@ class PackagingStudioSuite:
             
         auto_create_blend = self.auto_create_blend_var.get()
         auto_open_blender = self.auto_open_blender_var.get()
+        auto_append_excel = self.auto_append_excel_var.get()
+        excel_path = self.excel_path_var.get().strip()
         
         subfolders = ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"]
         success_count = 0
         duplicate_count = 0
+        excel_appended_count = 0
         last_blend = ""
         last_proj = ""
         
         for item in self.files_to_organize:
             brand = item["brand"].strip()
             sku = item["sku"].strip() if item["sku"].strip() else os.path.splitext(item["filename"])[0]
+            cat = item.get("cat", "瓶装")
             proj_dir = os.path.join(root_dir, brand, sku) if brand else os.path.join(root_dir, sku)
             
             for sub in subfolders:
@@ -797,7 +840,6 @@ class PackagingStudioSuite:
             design_dir = os.path.join(proj_dir, "01_Design_平面原稿")
             ext = os.path.splitext(item["filename"])[1]
             
-            # 查重与规范化版本号
             existing_files = os.listdir(design_dir) if os.path.exists(design_dir) else []
             is_dup = False
             if item.get("md5"):
@@ -829,9 +871,16 @@ class PackagingStudioSuite:
                 elif os.path.exists(target_blend):
                     last_blend = target_blend
 
+            # 自动追加写入 Excel 产品台账
+            if auto_append_excel and excel_path and os.path.exists(excel_path):
+                if append_project_to_excel(excel_path, brand, sku, cat, proj_dir):
+                    excel_appended_count += 1
+
         msg = []
         if success_count > 0:
             msg.append(f"✅ 成功归档并创建 {success_count} 个标准项目！")
+            if excel_appended_count > 0:
+                msg.append(f"📊 自动同步将 {excel_appended_count} 个新项目录入《产品列表.xlsx》！")
         if duplicate_count > 0:
             msg.append(f"ℹ️ 自动跳过 {duplicate_count} 个微信重复接收文件。")
             
@@ -849,7 +898,7 @@ class PackagingStudioSuite:
                 
         messagebox.showinfo("🎉 处理完成", "\n".join(msg))
         self.clear_org()
-        self.load_all_asset_data() # 刷新资产看板
+        self.load_all_asset_data()
 
     # ---------------- 资产看板数据与同步 ----------------
     def start_excel_auto_sync_watcher(self):
@@ -862,7 +911,7 @@ class PackagingStudioSuite:
                     self.thumb_cache.clear()
                     self.load_all_asset_data()
                     self.sync_status_lbl.config(text="⚡ Excel 已更新，已自动同步！", bg="#FEF3C7", fg="#B45309")
-                    self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 扫描优先去重已就绪", bg="#ECFDF5", fg="#059669"))
+                    self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 扫描优先实时同步已就绪", bg="#ECFDF5", fg="#059669"))
                 elif self.last_excel_mtime == 0:
                     self.last_excel_mtime = current_mtime
             except Exception:
