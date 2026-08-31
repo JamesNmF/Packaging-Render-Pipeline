@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-包装视觉资产管理器 (Packaging Visual Asset Hub - v3.0 深度融合版)
+包装视觉资产管理器 (Packaging Visual Asset Hub - v3.1 实时自动同步版)
 特性：
-1. 【Excel 结构化台账深度融合】：自动解析并提取《产品列表.xlsx》内嵌的 61 张高清渲染图与文件夹超链接！
-2. 【多维筛选与分类】：支持按【品牌/客户】与【形态分类】(瓶装/袋装/盒装/套盒) 毫秒级筛选！
-3. 【实时硬盘扫描 + Excel 双源支持】：不仅支持 Excel 台账，还可实时扫描当前工作盘新增工程。
-4. 【一键直达交互】：
-   - 单击卡片 / 📁 按钮 -> 0.1秒直接弹出 Windows 对应项目文件夹！
-   - 双击卡片 / 🚀 按钮 -> 自动启动 Blender 5.2 并直接打开 3D 工程！
-   - 右键菜单 -> 打开平面原稿 .ai / 查看高清渲染大图 / 复制路径。
-5. 【极速分页 & HTML 导出】：支持流畅分页，一键导出独立 Web 看板。
+1. 【Excel 实时热同步监听】：后台每 2 秒检测《产品列表.xlsx》修改时间，表格一保存，界面 0.1 秒自动静默热更新！
+2. 【双向图文提取】：自动提取内嵌高清渲染图、分类、产品名与本地超链接。
+3. 【形态与品牌多维筛选】：瓶装、袋装、盒装、套盒一键毫秒级筛选。
+4. 【一键直达交互】：单击打开文件夹，双击打开 Blender 3D 工程，右键全功能菜单。
+5. 【极速分页 & HTML 导出】：流畅 0 延迟，随时导出独立网页画廊。
 """
 
 import os
@@ -75,17 +72,15 @@ def save_config(cfg):
 
 
 def parse_and_cache_excel(excel_path):
-    """解析 Excel 并在后台自动提取内嵌的高清渲染图"""
+    """解析 Excel 并在后台自动提取/更新内嵌的高清渲染图"""
     projects = []
     if not excel_path or not os.path.exists(excel_path):
         return projects
 
     try:
-        # 1. 读表格元数据
         wb = openpyxl.load_workbook(excel_path, data_only=True)
         sheet = wb['全部'] if '全部' in wb.sheetnames else wb.active
         
-        # 2. 提取 XML 中嵌入的图片与单元格行映射
         row_image_map = {}
         with zipfile.ZipFile(excel_path, 'r') as z:
             if 'xl/drawings/drawing1.xml' in z.namelist() and 'xl/drawings/_rels/drawing1.xml.rels' in z.namelist():
@@ -121,12 +116,10 @@ def parse_and_cache_excel(excel_path):
                                 ext = os.path.splitext(media_path)[1]
                                 out_filename = f"excel_img_r{row_idx}{ext}"
                                 out_full = os.path.join(EXCEL_CACHE_DIR, out_filename)
-                                if not os.path.exists(out_full):
-                                    with open(out_full, 'wb') as f_out:
-                                        f_out.write(z.read(media_path))
+                                with open(out_full, 'wb') as f_out:
+                                    f_out.write(z.read(media_path))
                                 row_image_map[row_idx] = out_full
 
-        # 3. 组装项目列表
         for r in range(2, sheet.max_row + 1):
             name = sheet.cell(row=r, column=2).value
             cat = sheet.cell(row=r, column=4).value or "未分类"
@@ -137,13 +130,10 @@ def parse_and_cache_excel(excel_path):
                 continue
 
             thumb = row_image_map.get(r, None)
-            
-            # 如果路径在本地存在但 Excel 没提取到图，尝试从本地找
             norm_path = path.replace("/", "\\") if path else ""
             if not thumb and os.path.exists(norm_path):
                 thumb = find_project_thumbnail(norm_path)
 
-            # 智能解析品牌 (如从 E:/zjc/柏缇/xxx 提取 柏缇)
             brand = "柏缇"
             if norm_path:
                 parts = norm_path.strip("\\").split("\\")
@@ -279,16 +269,20 @@ def scan_workspace_projects(root_dir):
 class AssetHubApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub v3.0)")
+        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub v3.1)")
         self.root.geometry("1180x780")
         self.root.minsize(960, 620)
         
         self.cfg = load_config()
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        self.current_workspace_var = tk.StringVar(value=self.cfg.get("current_workspace", self.workspaces[0]))
+        cur_ws = self.cfg.get("current_workspace", self.workspaces[0])
+        if not os.path.exists(cur_ws) and self.workspaces:
+            cur_ws = self.workspaces[0]
+        self.current_workspace_var = tk.StringVar(value=cur_ws)
         self.excel_path_var = tk.StringVar(value=self.cfg.get("excel_path", DEFAULT_EXCEL_PATH))
         
-        self.view_mode_var = tk.StringVar(value="excel") # "excel" or "disk"
+        self.last_excel_mtime = 0
+        self.view_mode_var = tk.StringVar(value="excel")
         self.search_var = tk.StringVar()
         self.selected_category_var = tk.StringVar(value="全部")
         
@@ -303,13 +297,13 @@ class AssetHubApp:
         
         self.build_ui()
         self.load_all_data()
+        
+        self.start_excel_auto_sync_watcher()
 
     def build_ui(self):
-        # 1. 顶部控制栏 (视图切换、搜索、导入)
         top_bar = ttk.Frame(self.root, padding=(15, 10))
         top_bar.pack(fill=tk.X)
         
-        # 数据源切换
         ttk.Label(top_bar, text="📊 数据源:").pack(side=tk.LEFT, padx=(0, 4))
         self.combo_source = ttk.Combobox(
             top_bar,
@@ -327,11 +321,14 @@ class AssetHubApp:
         search_entry.pack(side=tk.LEFT, padx=(0, 15))
         self.search_var.trace_add("write", lambda *args: self.on_search_change())
         
-        ttk.Button(top_bar, text="📊 同步/导入 Excel 台账...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(top_bar, text="🔄 刷新", command=self.load_all_data).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_bar, text="📊 重新指定 Excel...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_bar, text="🔄 立即刷新", command=self.load_all_data).pack(side=tk.LEFT, padx=(0, 6))
+        
+        self.sync_status_lbl = tk.Label(top_bar, text="🟢 实时自动同步中", font=("Microsoft YaHei", 8), fg="#059669", bg="#ECFDF5", padx=6, pady=2)
+        self.sync_status_lbl.pack(side=tk.LEFT, padx=(6, 0))
+        
         ttk.Button(top_bar, text="🌐 导出网页画廊 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
 
-        # 2. 底栏分页控制
         self.bottom_bar = ttk.Frame(self.root, padding=(15, 8))
         self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
@@ -344,7 +341,6 @@ class AssetHubApp:
         self.btn_prev = ttk.Button(self.bottom_bar, text="⬅️ 上一页", command=self.prev_page)
         self.btn_prev.pack(side=tk.RIGHT)
 
-        # 3. 主体区域 (左侧分类/形态树 + 右侧卡片视口)
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
         
@@ -383,6 +379,27 @@ class AssetHubApp:
         self.canvas.bind("<Configure>", self.on_canvas_configure)
         self.canvas.bind_all("<MouseWheel>", self.on_mouse_wheel)
 
+    def start_excel_auto_sync_watcher(self):
+        ex_path = self.excel_path_var.get().strip()
+        if ex_path and os.path.exists(ex_path):
+            try:
+                current_mtime = os.path.getmtime(ex_path)
+                if self.last_excel_mtime > 0 and current_mtime > self.last_excel_mtime:
+                    self.last_excel_mtime = current_mtime
+                    self.thumb_cache.clear()
+                    self.load_all_data()
+                    self.flash_sync_status("⚡ 检测到 Excel 表格已更新，已自动同步完成！")
+                elif self.last_excel_mtime == 0:
+                    self.last_excel_mtime = current_mtime
+            except Exception:
+                pass
+                
+        self.root.after(2000, self.start_excel_auto_sync_watcher)
+
+    def flash_sync_status(self, text):
+        self.sync_status_lbl.config(text=text, bg="#FEF3C7", fg="#B45309")
+        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 实时自动同步中", bg="#ECFDF5", fg="#059669"))
+
     def on_canvas_configure(self, event):
         self.canvas.itemconfig(self.canvas_window, width=event.width)
         self.render_cards()
@@ -391,19 +408,19 @@ class AssetHubApp:
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def load_all_data(self):
-        # 1. 载入 Excel 数据
         ex_path = self.excel_path_var.get().strip()
         if not ex_path or not os.path.exists(ex_path):
             ex_path = DEFAULT_EXCEL_PATH
             self.excel_path_var.set(ex_path)
             
+        if os.path.exists(ex_path):
+            self.last_excel_mtime = os.path.getmtime(ex_path)
+            
         self.excel_projects = parse_and_cache_excel(ex_path)
         
-        # 2. 载入工作盘实时数据
         cur_ws = self.current_workspace_var.get().strip()
         self.disk_projects = scan_workspace_projects(cur_ws)
         
-        # 刷新下拉框文字
         self.combo_source["values"] = [
             f"Excel 产品台账 ({len(self.excel_projects)})",
             f"本地工作盘扫描 ({len(self.disk_projects)})"
@@ -424,7 +441,6 @@ class AssetHubApp:
         is_disk = (self.view_mode_var.get() == "disk")
         self.current_display_list = self.disk_projects if is_disk else self.excel_projects
         
-        # 统计左侧分类
         cat_counts = {}
         for p in self.current_display_list:
             c = p.get("cat", "未分类")
@@ -453,7 +469,7 @@ class AssetHubApp:
             save_config(self.cfg)
             self.view_mode_var.set("excel")
             self.load_all_data()
-            messagebox.showinfo("导入成功", f"已成功解析并加载 Excel 产品台账！共 {len(self.excel_projects)} 个产品。")
+            messagebox.showinfo("同步成功", f"已成功绑定并开启实时同步！共 {len(self.excel_projects)} 个产品。")
 
     def on_search_change(self):
         self.current_page = 0
@@ -598,7 +614,6 @@ class AssetHubApp:
             meta_frame = tk.Frame(card, bg="white", pady=4)
             meta_frame.pack(fill=tk.X)
             
-            # 分类胶囊标签 (瓶装/袋装/盒装)
             badge_row = tk.Frame(meta_frame, bg="white")
             badge_row.pack(fill=tk.X, pady=(0, 2))
             
