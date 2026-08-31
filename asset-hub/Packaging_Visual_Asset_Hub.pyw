@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-包装视觉资产管理器 (Packaging Visual Asset Hub - v2.0 高性能防崩版)
-优化：
-1. 彻底解决 PermissionError (权限拒绝/System Volume Information) 崩溃问题
-2. 支持海量工程 (400+ 项目) 极速分页与懒加载，0 卡顿秒开！
-3. 自动抓取 04_Renders_通道输出 / 渲染 / 交付 中的 Beauty 高清成品图作为封面
-4. 一键直达：单击打开文件夹 / 双击打开 Blender 5.2 / 右键菜单
+包装视觉资产管理器 (Packaging Visual Asset Hub - v3.0 深度融合版)
+特性：
+1. 【Excel 结构化台账深度融合】：自动解析并提取《产品列表.xlsx》内嵌的 61 张高清渲染图与文件夹超链接！
+2. 【多维筛选与分类】：支持按【品牌/客户】与【形态分类】(瓶装/袋装/盒装/套盒) 毫秒级筛选！
+3. 【实时硬盘扫描 + Excel 双源支持】：不仅支持 Excel 台账，还可实时扫描当前工作盘新增工程。
+4. 【一键直达交互】：
+   - 单击卡片 / 📁 按钮 -> 0.1秒直接弹出 Windows 对应项目文件夹！
+   - 双击卡片 / 🚀 按钮 -> 自动启动 Blender 5.2 并直接打开 3D 工程！
+   - 右键菜单 -> 打开平面原稿 .ai / 查看高清渲染大图 / 复制路径。
+5. 【极速分页 & HTML 导出】：支持流畅分页，一键导出独立 Web 看板。
 """
 
 import os
@@ -13,15 +17,21 @@ import sys
 import re
 import json
 import glob
+import zipfile
 import webbrowser
 import subprocess
+import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk, ImageDraw
+import openpyxl
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v6.json")
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".packaging_asset_thumbnails")
-os.makedirs(CACHE_DIR, exist_ok=True)
+EXCEL_CACHE_DIR = os.path.join(CACHE_DIR, "excel_images")
+os.makedirs(EXCEL_CACHE_DIR, exist_ok=True)
+
+DEFAULT_EXCEL_PATH = r"C:\Users\qq424\WorkBuddy\2026-08-26-15-33-05\产品列表.xlsx"
 
 BLENDER_EXE = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 if not os.path.exists(BLENDER_EXE):
@@ -52,7 +62,8 @@ def load_config():
             pass
     return {
         "workspaces": DEFAULT_WORKSPACES,
-        "current_workspace": DEFAULT_WORKSPACES[0]
+        "current_workspace": DEFAULT_WORKSPACES[0],
+        "excel_path": DEFAULT_EXCEL_PATH if os.path.exists(DEFAULT_EXCEL_PATH) else ""
     }
 
 def save_config(cfg):
@@ -63,8 +74,100 @@ def save_config(cfg):
         pass
 
 
+def parse_and_cache_excel(excel_path):
+    """解析 Excel 并在后台自动提取内嵌的高清渲染图"""
+    projects = []
+    if not excel_path or not os.path.exists(excel_path):
+        return projects
+
+    try:
+        # 1. 读表格元数据
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+        sheet = wb['全部'] if '全部' in wb.sheetnames else wb.active
+        
+        # 2. 提取 XML 中嵌入的图片与单元格行映射
+        row_image_map = {}
+        with zipfile.ZipFile(excel_path, 'r') as z:
+            if 'xl/drawings/drawing1.xml' in z.namelist() and 'xl/drawings/_rels/drawing1.xml.rels' in z.namelist():
+                drawing_xml = z.read('xl/drawings/drawing1.xml')
+                rels_xml = z.read('xl/drawings/_rels/drawing1.xml.rels')
+
+                root_d = ET.fromstring(drawing_xml)
+                root_r = ET.fromstring(rels_xml)
+
+                rel_map = {}
+                for rel in root_r:
+                    r_id = rel.attrib.get('Id')
+                    target = rel.attrib.get('Target')
+                    t_clean = target.lstrip('/').replace('../', '')
+                    if not t_clean.startswith('xl/'):
+                        t_clean = 'xl/' + t_clean
+                    rel_map[r_id] = t_clean
+
+                ns = {
+                    'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+                    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                }
+
+                for anchor in root_d.findall('.//xdr:twoCellAnchor', ns) + root_d.findall('.//xdr:oneCellAnchor', ns):
+                    from_elem = anchor.find('xdr:from', ns)
+                    if from_elem is not None:
+                        row_idx = int(from_elem.find('xdr:row', ns).text) + 1
+                        blip = anchor.find('.//a:blip', ns)
+                        if blip is not None:
+                            embed_id = blip.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                            if embed_id and embed_id in rel_map:
+                                media_path = rel_map[embed_id]
+                                ext = os.path.splitext(media_path)[1]
+                                out_filename = f"excel_img_r{row_idx}{ext}"
+                                out_full = os.path.join(EXCEL_CACHE_DIR, out_filename)
+                                if not os.path.exists(out_full):
+                                    with open(out_full, 'wb') as f_out:
+                                        f_out.write(z.read(media_path))
+                                row_image_map[row_idx] = out_full
+
+        # 3. 组装项目列表
+        for r in range(2, sheet.max_row + 1):
+            name = sheet.cell(row=r, column=2).value
+            cat = sheet.cell(row=r, column=4).value or "未分类"
+            path = sheet.cell(row=r, column=5).value or ""
+            time_str = sheet.cell(row=r, column=6).value or ""
+
+            if not name:
+                continue
+
+            thumb = row_image_map.get(r, None)
+            
+            # 如果路径在本地存在但 Excel 没提取到图，尝试从本地找
+            norm_path = path.replace("/", "\\") if path else ""
+            if not thumb and os.path.exists(norm_path):
+                thumb = find_project_thumbnail(norm_path)
+
+            # 智能解析品牌 (如从 E:/zjc/柏缇/xxx 提取 柏缇)
+            brand = "柏缇"
+            if norm_path:
+                parts = norm_path.strip("\\").split("\\")
+                if len(parts) >= 2 and parts[-2] not in {"zjc", "Projects", "E:", "D:"}:
+                    brand = parts[-2]
+
+            projects.append({
+                "source": "excel",
+                "brand": brand,
+                "sku": str(name).strip(),
+                "cat": str(cat).strip(),
+                "path": norm_path,
+                "thumbnail": thumb,
+                "time": str(time_str),
+                "mtime": os.path.getmtime(norm_path) if os.path.exists(norm_path) else 0
+            })
+
+    except Exception as e:
+        print(f"Error parsing Excel: {e}")
+
+    return projects
+
+
 def find_project_thumbnail(proj_path):
-    """查找项目中最合适的高清渲染图作为缩略图"""
     render_dirs = [
         os.path.join(proj_path, "04_Renders_通道输出"),
         os.path.join(proj_path, "05_Delivery_最终交付"),
@@ -72,7 +175,6 @@ def find_project_thumbnail(proj_path):
         os.path.join(proj_path, "Renders"),
         proj_path
     ]
-    
     candidates = []
     for rdir in render_dirs:
         if os.path.exists(rdir):
@@ -81,9 +183,7 @@ def find_project_thumbnail(proj_path):
                     candidates.extend(glob.glob(os.path.join(rdir, ext)))
             except Exception:
                 pass
-                
     if candidates:
-        # 优先选择包含 "Beauty", "成品", "主图", "Camera" 的图
         beauty_imgs = [c for c in candidates if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面"])]
         if beauty_imgs:
             try:
@@ -91,8 +191,6 @@ def find_project_thumbnail(proj_path):
                 return beauty_imgs[0]
             except Exception:
                 return beauty_imgs[0]
-                
-        # 排除包含 mask, alpha, crypto 的黑白遮罩图
         filtered = [c for c in candidates if not any(k in os.path.basename(c).lower() for k in ["mask", "alpha", "crypto", "选区", "蒙版"])]
         if filtered:
             try:
@@ -100,22 +198,18 @@ def find_project_thumbnail(proj_path):
                 return filtered[0]
             except Exception:
                 return filtered[0]
-                
         try:
             candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
             return candidates[0]
         except Exception:
             return candidates[0]
-            
     return None
 
 
 def scan_workspace_projects(root_dir):
-    """安全扫描工作盘下的所有包装项目，带完整权限与异常防护"""
     projects = []
     if not os.path.exists(root_dir):
         return projects
-        
     try:
         entries = os.listdir(root_dir)
     except (PermissionError, OSError):
@@ -124,15 +218,10 @@ def scan_workspace_projects(root_dir):
     for entry in entries:
         if entry.lower() in SYSTEM_IGNORED_DIRS or entry.startswith('.') or entry.startswith('$') or entry.startswith('_'):
             continue
-            
         full_p = os.path.join(root_dir, entry)
         try:
             if not os.path.isdir(full_p):
                 continue
-        except (PermissionError, OSError):
-            continue
-            
-        try:
             sub_entries = os.listdir(full_p)
         except (PermissionError, OSError):
             continue
@@ -148,14 +237,16 @@ def scan_workspace_projects(root_dir):
         if is_direct_proj:
             thumb = find_project_thumbnail(full_p)
             projects.append({
+                "source": "disk",
                 "brand": "通用/未分类",
                 "sku": entry,
+                "cat": "三维项目",
                 "path": full_p,
                 "thumbnail": thumb,
+                "time": "",
                 "mtime": mtime
             })
         else:
-            # 这是一个客户/品牌文件夹 (如 E:\zjc\柏缇\)，扫描其二级目录
             brand_name = entry
             for sku in sub_entries:
                 if sku.lower() in SYSTEM_IGNORED_DIRS or sku.startswith('.') or sku.startswith('_'):
@@ -169,10 +260,13 @@ def scan_workspace_projects(root_dir):
                         except Exception:
                             s_mtime = mtime
                         projects.append({
+                            "source": "disk",
                             "brand": brand_name,
                             "sku": sku,
+                            "cat": "三维项目",
                             "path": sku_p,
                             "thumbnail": thumb,
+                            "time": "",
                             "mtime": s_mtime
                         })
                 except (PermissionError, OSError):
@@ -185,56 +279,59 @@ def scan_workspace_projects(root_dir):
 class AssetHubApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub)")
-        self.root.geometry("1160x760")
-        self.root.minsize(920, 600)
+        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub v3.0)")
+        self.root.geometry("1180x780")
+        self.root.minsize(960, 620)
         
         self.cfg = load_config()
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        cur_ws = self.cfg.get("current_workspace", self.workspaces[0])
-        if not os.path.exists(cur_ws) and self.workspaces:
-            cur_ws = self.workspaces[0]
-        self.current_workspace_var = tk.StringVar(value=cur_ws)
+        self.current_workspace_var = tk.StringVar(value=self.cfg.get("current_workspace", self.workspaces[0]))
+        self.excel_path_var = tk.StringVar(value=self.cfg.get("excel_path", DEFAULT_EXCEL_PATH))
         
+        self.view_mode_var = tk.StringVar(value="excel") # "excel" or "disk"
         self.search_var = tk.StringVar()
-        self.selected_brand_var = tk.StringVar(value="全部品牌")
+        self.selected_category_var = tk.StringVar(value="全部")
         
-        self.page_size = 30 # 每页显示 30 个卡片，保障 0 延迟秒开
+        self.page_size = 30
         self.current_page = 0
         
-        self.all_projects = []
+        self.excel_projects = []
+        self.disk_projects = []
+        self.current_display_list = []
         self.filtered_projects = []
         self.thumb_cache = {}
         
         self.build_ui()
-        self.refresh_projects()
+        self.load_all_data()
 
     def build_ui(self):
-        # 1. 顶部控制栏
+        # 1. 顶部控制栏 (视图切换、搜索、导入)
         top_bar = ttk.Frame(self.root, padding=(15, 10))
         top_bar.pack(fill=tk.X)
         
-        ttk.Label(top_bar, text="📂 主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
-        self.ws_combo = ttk.Combobox(
+        # 数据源切换
+        ttk.Label(top_bar, text="📊 数据源:").pack(side=tk.LEFT, padx=(0, 4))
+        self.combo_source = ttk.Combobox(
             top_bar,
-            textvariable=self.current_workspace_var,
-            values=self.workspaces,
+            textvariable=self.view_mode_var,
+            values=["excel", "disk"],
             state="readonly",
-            width=28,
+            width=16,
             font=("Microsoft YaHei", 9)
         )
-        self.ws_combo.pack(side=tk.LEFT, padx=(0, 15))
-        self.ws_combo.bind("<<ComboboxSelected>>", self.on_workspace_change)
+        self.combo_source.pack(side=tk.LEFT, padx=(0, 15))
+        self.combo_source.bind("<<ComboboxSelected>>", self.on_source_change)
         
-        ttk.Label(top_bar, text="🔍 快速搜索:").pack(side=tk.LEFT, padx=(0, 6))
-        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=22)
+        ttk.Label(top_bar, text="🔍 搜索产品:").pack(side=tk.LEFT, padx=(0, 4))
+        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=20)
         search_entry.pack(side=tk.LEFT, padx=(0, 15))
         self.search_var.trace_add("write", lambda *args: self.on_search_change())
         
-        ttk.Button(top_bar, text="🔄 刷新", command=self.refresh_projects).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(top_bar, text="🌐 导出网页看板 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
+        ttk.Button(top_bar, text="📊 同步/导入 Excel 台账...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_bar, text="🔄 刷新", command=self.load_all_data).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_bar, text="🌐 导出网页画廊 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
 
-        # 2. 分页控制栏 (底栏)
+        # 2. 底栏分页控制
         self.bottom_bar = ttk.Frame(self.root, padding=(15, 8))
         self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
@@ -247,14 +344,14 @@ class AssetHubApp:
         self.btn_prev = ttk.Button(self.bottom_bar, text="⬅️ 上一页", command=self.prev_page)
         self.btn_prev.pack(side=tk.RIGHT)
 
-        # 3. 主体区域 (左侧品牌树 + 右侧卡片视口)
+        # 3. 主体区域 (左侧分类/形态树 + 右侧卡片视口)
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
         
-        left_frame = ttk.LabelFrame(main_pane, text=" 🏷️ 客户/品牌分类 ", padding=8, width=200)
+        left_frame = ttk.LabelFrame(main_pane, text=" 🏷️ 形态分类 & 筛选 ", padding=8, width=200)
         main_pane.add(left_frame, weight=1)
         
-        self.brand_listbox = tk.Listbox(
+        self.category_listbox = tk.Listbox(
             left_frame,
             font=("Microsoft YaHei", 10),
             selectmode=tk.SINGLE,
@@ -265,8 +362,8 @@ class AssetHubApp:
             highlightthickness=0,
             activestyle="none"
         )
-        self.brand_listbox.pack(fill=tk.BOTH, expand=True)
-        self.brand_listbox.bind("<<ListboxSelect>>", self.on_brand_select)
+        self.category_listbox.pack(fill=tk.BOTH, expand=True)
+        self.category_listbox.bind("<<ListboxSelect>>", self.on_category_select)
         
         right_frame = ttk.Frame(main_pane)
         main_pane.add(right_frame, weight=5)
@@ -293,61 +390,99 @@ class AssetHubApp:
     def on_mouse_wheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    def on_workspace_change(self, event=None):
+    def load_all_data(self):
+        # 1. 载入 Excel 数据
+        ex_path = self.excel_path_var.get().strip()
+        if not ex_path or not os.path.exists(ex_path):
+            ex_path = DEFAULT_EXCEL_PATH
+            self.excel_path_var.set(ex_path)
+            
+        self.excel_projects = parse_and_cache_excel(ex_path)
+        
+        # 2. 载入工作盘实时数据
         cur_ws = self.current_workspace_var.get().strip()
-        self.cfg["current_workspace"] = cur_ws
-        save_config(self.cfg)
-        self.refresh_projects()
+        self.disk_projects = scan_workspace_projects(cur_ws)
+        
+        # 刷新下拉框文字
+        self.combo_source["values"] = [
+            f"Excel 产品台账 ({len(self.excel_projects)})",
+            f"本地工作盘扫描 ({len(self.disk_projects)})"
+        ]
+        if self.view_mode_var.get() == "disk" or not self.excel_projects:
+            self.combo_source.current(1)
+        else:
+            self.combo_source.current(0)
+            
+        self.update_active_dataset()
+
+    def on_source_change(self, event=None):
+        sel_idx = self.combo_source.current()
+        self.view_mode_var.set("disk" if sel_idx == 1 else "excel")
+        self.update_active_dataset()
+
+    def update_active_dataset(self):
+        is_disk = (self.view_mode_var.get() == "disk")
+        self.current_display_list = self.disk_projects if is_disk else self.excel_projects
+        
+        # 统计左侧分类
+        cat_counts = {}
+        for p in self.current_display_list:
+            c = p.get("cat", "未分类")
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+            
+        self.category_listbox.delete(0, tk.END)
+        self.category_listbox.insert(tk.END, f"✨ 全部形态 ({len(self.current_display_list)})")
+        
+        cats_sorted = sorted(cat_counts.keys())
+        for c in cats_sorted:
+            self.category_listbox.insert(tk.END, f"📦 {c} ({cat_counts[c]})")
+            
+        self.category_listbox.select_set(0)
+        self.selected_category_var.set("全部")
+        self.current_page = 0
+        self.apply_filter()
+
+    def import_new_excel(self):
+        f = filedialog.askopenfilename(
+            title="选择要导入的包装产品列表 Excel 表格 (.xlsx)",
+            filetypes=[("Excel 表格", "*.xlsx"), ("所有文件", "*.*")]
+        )
+        if f:
+            self.excel_path_var.set(f)
+            self.cfg["excel_path"] = f
+            save_config(self.cfg)
+            self.view_mode_var.set("excel")
+            self.load_all_data()
+            messagebox.showinfo("导入成功", f"已成功解析并加载 Excel 产品台账！共 {len(self.excel_projects)} 个产品。")
 
     def on_search_change(self):
         self.current_page = 0
         self.apply_filter()
 
-    def refresh_projects(self):
-        cur_ws = self.current_workspace_var.get().strip()
-        self.all_projects = scan_workspace_projects(cur_ws)
-        
-        brand_counts = {}
-        for p in self.all_projects:
-            b = p["brand"]
-            brand_counts[b] = brand_counts.get(b, 0) + 1
-            
-        self.brand_listbox.delete(0, tk.END)
-        self.brand_listbox.insert(tk.END, f"✨ 全部项目 ({len(self.all_projects)})")
-        
-        brands_sorted = sorted(brand_counts.keys())
-        for b in brands_sorted:
-            self.brand_listbox.insert(tk.END, f"🏷️ {b} ({brand_counts[b]})")
-            
-        self.brand_listbox.select_set(0)
-        self.selected_brand_var.set("全部品牌")
-        self.current_page = 0
-        self.apply_filter()
-
-    def on_brand_select(self, event=None):
-        sel = self.brand_listbox.curselection()
+    def on_category_select(self, event=None):
+        sel = self.category_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
-        text = self.brand_listbox.get(idx)
+        text = self.category_listbox.get(idx)
         if idx == 0:
-            self.selected_brand_var.set("全部品牌")
+            self.selected_category_var.set("全部")
         else:
-            m = re.search(r"🏷️\s*(.*?)\s*\(\d+\)", text)
+            m = re.search(r"📦\s*(.*?)\s*\(\d+\)", text)
             if m:
-                self.selected_brand_var.set(m.group(1))
+                self.selected_category_var.set(m.group(1))
         self.current_page = 0
         self.apply_filter()
 
     def apply_filter(self):
-        brand = self.selected_brand_var.get()
+        cat = self.selected_category_var.get()
         kw = self.search_var.get().strip().lower()
         
         self.filtered_projects = []
-        for p in self.all_projects:
-            if brand != "全部品牌" and p["brand"] != brand:
+        for p in self.current_display_list:
+            if cat != "全部" and p.get("cat") != cat:
                 continue
-            if kw and (kw not in p["sku"].lower() and kw not in p["brand"].lower()):
+            if kw and (kw not in p["sku"].lower() and kw not in p.get("brand", "").lower() and kw not in p.get("cat", "").lower()):
                 continue
             self.filtered_projects.append(p)
             
@@ -359,7 +494,7 @@ class AssetHubApp:
         start_idx = self.current_page * self.page_size + 1 if total_items > 0 else 0
         end_idx = min((self.current_page + 1) * self.page_size, total_items)
         
-        self.page_info_lbl.config(text=f"共 {total_items} 个项目 | 正在显示第 {start_idx} - {end_idx} 项 (第 {self.current_page + 1}/{total_pages} 页)")
+        self.page_info_lbl.config(text=f"共 {total_items} 个产品 | 正在显示第 {start_idx} - {end_idx} 项 (第 {self.current_page + 1}/{total_pages} 页)")
         self.btn_prev.config(state=tk.NORMAL if self.current_page > 0 else tk.DISABLED)
         self.btn_next.config(state=tk.NORMAL if self.current_page < total_pages - 1 else tk.DISABLED)
         
@@ -421,7 +556,7 @@ class AssetHubApp:
         if not self.filtered_projects:
             no_lbl = tk.Label(
                 self.grid_container,
-                text="📭 没有找到匹配的包装项目\n(提示：可通过顶部切换工作盘或点击刷新)",
+                text="📭 没有找到匹配的包装产品\n(提示：可通过左侧切换形态分类或清空搜索关键词)",
                 font=("Microsoft YaHei", 12),
                 bg="#F0F2F5",
                 fg="#888",
@@ -436,7 +571,6 @@ class AssetHubApp:
         card_w = 210
         cols = max(1, container_width // (card_w + 16))
 
-        # 当前页数据切片
         start_idx = self.current_page * self.page_size
         end_idx = start_idx + self.page_size
         page_items = self.filtered_projects[start_idx:end_idx]
@@ -464,16 +598,32 @@ class AssetHubApp:
             meta_frame = tk.Frame(card, bg="white", pady=4)
             meta_frame.pack(fill=tk.X)
             
-            b_tag = tk.Label(
-                meta_frame,
-                text=proj["brand"],
-                font=("Microsoft YaHei", 8),
+            # 分类胶囊标签 (瓶装/袋装/盒装)
+            badge_row = tk.Frame(meta_frame, bg="white")
+            badge_row.pack(fill=tk.X, pady=(0, 2))
+            
+            cat_tag = tk.Label(
+                badge_row,
+                text=proj.get("cat", "包装"),
+                font=("Microsoft YaHei", 8, "bold"),
                 bg="#E1EFFF",
                 fg="#005A9E",
                 padx=4,
                 pady=1
             )
-            b_tag.pack(anchor="w", pady=(0, 2))
+            cat_tag.pack(side=tk.LEFT, padx=(0, 4))
+            
+            if proj.get("brand"):
+                b_tag = tk.Label(
+                    badge_row,
+                    text=proj["brand"],
+                    font=("Microsoft YaHei", 8),
+                    bg="#F0F0F0",
+                    fg="#555",
+                    padx=4,
+                    pady=1
+                )
+                b_tag.pack(side=tk.LEFT)
             
             title_lbl = tk.Label(
                 meta_frame,
@@ -489,13 +639,15 @@ class AssetHubApp:
             action_frame = tk.Frame(card, bg="white", pady=4)
             action_frame.pack(fill=tk.X)
             
+            has_path = bool(proj.get("path") and os.path.exists(proj["path"]))
             btn_open = tk.Button(
                 action_frame,
-                text="📁 打开文件夹",
+                text="📁 打开文件夹" if has_path else "📁 路径未就绪",
                 font=("Microsoft YaHei", 8),
-                bg="#F0F0F0",
+                bg="#F0F0F0" if has_path else "#FAFAFA",
+                fg="#222" if has_path else "#999",
                 relief=tk.FLAT,
-                command=lambda p=proj["path"]: self.open_folder(p)
+                command=lambda p=proj.get("path"): self.open_folder(p)
             )
             btn_open.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
             
@@ -506,23 +658,29 @@ class AssetHubApp:
                 bg="#EBF5FB",
                 fg="#005A9E",
                 relief=tk.FLAT,
-                command=lambda p=proj["path"]: self.launch_blend(p)
+                command=lambda p=proj.get("path"): self.launch_blend(p)
             )
             btn_blend.pack(side=tk.RIGHT)
             
             for w in (card, img_lbl, title_lbl, meta_frame):
-                w.bind("<Button-1>", lambda e, p=proj["path"]: self.open_folder(p))
-                w.bind("<Double-1>", lambda e, p=proj["path"]: self.launch_blend(p))
+                w.bind("<Button-1>", lambda e, p=proj.get("path"): self.open_folder(p))
+                w.bind("<Double-1>", lambda e, p=proj.get("path"): self.launch_blend(p))
                 w.bind("<Button-3>", lambda e, pr=proj: self.show_context_menu(e, pr))
 
     def open_folder(self, path):
-        if os.path.exists(path):
+        if path and os.path.exists(path):
             try:
                 os.startfile(path)
             except Exception as e:
                 messagebox.showerror("打开错误", str(e))
+        else:
+            messagebox.showwarning("提示", f"该项目的本地文件夹暂未找到或路径不存在:\n{path}")
 
     def launch_blend(self, proj_path):
+        if not proj_path or not os.path.exists(proj_path):
+            messagebox.showwarning("提示", f"未找到该项目的本地文件夹:\n{proj_path}")
+            return
+            
         blend_dir = os.path.join(proj_path, "03_3D_三维工程")
         target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
         
@@ -539,12 +697,14 @@ class AssetHubApp:
 
     def show_context_menu(self, event, proj):
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label=f"📁 打开项目文件夹: {proj['sku']}", command=lambda: self.open_folder(proj["path"]))
-        menu.add_command(label="🚀 启动 Blender 打开 3D 工程", command=lambda: self.launch_blend(proj["path"]))
-        menu.add_command(label="🎨 打开 01_Design 平面原稿文件夹", command=lambda: self.open_folder(os.path.join(proj["path"], "01_Design_平面原稿")))
-        menu.add_command(label="🖼️ 查看 04_Renders 渲染大图文件夹", command=lambda: self.open_folder(os.path.join(proj["path"], "04_Renders_通道输出")))
+        p = proj.get("path", "")
+        menu.add_command(label=f"📁 打开项目文件夹: {proj['sku']}", command=lambda: self.open_folder(p))
+        menu.add_command(label="🚀 启动 Blender 打开 3D 工程", command=lambda: self.launch_blend(p))
+        if p and os.path.exists(p):
+            menu.add_command(label="🎨 打开 01_Design 平面原稿", command=lambda: self.open_folder(os.path.join(p, "01_Design_平面原稿")))
+            menu.add_command(label="🖼️ 查看 04_Renders 渲染大图", command=lambda: self.open_folder(os.path.join(p, "04_Renders_通道输出")))
         menu.add_separator()
-        menu.add_command(label="📋 复制项目完整路径", command=lambda: self.copy_path_to_clipboard(proj["path"]))
+        menu.add_command(label="📋 复制项目完整路径", command=lambda: self.copy_path_to_clipboard(p))
         menu.tk_popup(event.x_root, event.y_root)
 
     def copy_path_to_clipboard(self, text):
@@ -554,13 +714,13 @@ class AssetHubApp:
 
     def export_html_gallery(self):
         cur_ws = self.current_workspace_var.get().strip()
-        html_file = os.path.join(cur_ws, "📦_包装项目全景视觉画廊.html")
+        html_file = os.path.join(cur_ws if os.path.exists(cur_ws) else os.path.expanduser("~"), "📦_包装项目全景视觉画廊.html")
         
         cards_html = []
-        for p in self.all_projects:
-            thumb_rel = p["thumbnail"] if p["thumbnail"] else ""
-            thumb_src = "file:///" + thumb_rel.replace("\\", "/") if thumb_rel else "https://via.placeholder.com/300x300?text=No+Render"
-            folder_uri = "file:///" + p["path"].replace("\\", "/")
+        for p in self.current_display_list:
+            thumb_rel = p.get("thumbnail") or ""
+            thumb_src = "file:///" + thumb_rel.replace("\\", "/") if (thumb_rel and os.path.exists(thumb_rel)) else "https://via.placeholder.com/300x300?text=No+Render"
+            folder_uri = "file:///" + p["path"].replace("\\", "/") if p.get("path") else "#"
             
             cards_html.append(f"""
             <div class="card" onclick="window.open('{folder_uri}')">
@@ -568,9 +728,12 @@ class AssetHubApp:
                     <img src="{thumb_src}" alt="{p['sku']}" loading="lazy">
                 </div>
                 <div class="meta">
-                    <span class="badge">{p['brand']}</span>
+                    <div style="display:flex; gap:6px; margin-bottom:6px;">
+                        <span class="badge" style="background:#0369a1;">{p.get('cat', '包装')}</span>
+                        <span class="badge" style="background:#475569;">{p.get('brand', '')}</span>
+                    </div>
                     <h3 class="title">{p['sku']}</h3>
-                    <p class="path">{p['path']}</p>
+                    <p class="path">{p.get('path', '')}</p>
                 </div>
             </div>
             """)
@@ -589,13 +752,13 @@ class AssetHubApp:
     .thumb-container {{ width: 100%; aspect-ratio: 1; background: #0f172a; display: flex; align-items: center; justify-content: center; }}
     .thumb-container img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
     .meta {{ padding: 12px; }}
-    .badge {{ display: inline-block; background: #0369a1; color: #e0f2fe; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; margin-bottom: 6px; }}
+    .badge {{ display: inline-block; color: #e0f2fe; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; }}
     .title {{ font-size: 14px; font-weight: 600; margin: 0 0 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
     .path {{ font-size: 11px; color: #94a3b8; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 </style>
 </head>
 <body>
-    <h1>📦 包装项目全景视觉资产画廊 (共 {len(self.all_projects)} 个项目)</h1>
+    <h1>📦 包装项目全景视觉资产画廊 (共 {len(self.current_display_list)} 个产品)</h1>
     <div class="grid">
         {"".join(cards_html)}
     </div>
