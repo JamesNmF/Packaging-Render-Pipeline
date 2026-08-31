@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 文件一键智能归档与项目脚手架创建器 (v2.5 增量归拢与去重版)
-核心升级：
-1. 【增量自动归拢】：自动识别 "(1)", "（2）", "- 副本", "改3" 等增量后缀，绝不创建碎片化文件夹，统一归入同一个项目！
-2. 【MD5 智能查重】：自动秒级比对文件哈希，识别微信重复接收文件，杜绝假更新。
-3. 【标准化版本演进】：在 01_Design_平面原稿/ 中自动按 _v01, _v02, _v03 规范排列。
+微信 AI 文件一键智能归档与项目脚手架创建器 (v2.6 Blender 首次创建自动化版)
+核心功能：
+1. 【首次创建 0 步骤开工】：归档 AI 文件时，自动克隆母版模板并命名为 "[产品名].blend" 放入 03_3D_三维工程/，并直接自动启动 Blender 打开！
+2. 【增量自动归拢】：自动识别 "(1)", "（2）", "- 副本" 等增量后缀，归拢至同一项目主干。
+3. 【MD5 智能查重】：秒级识别微信重复文件，杜绝假更新。
 4. 【多工作盘秒切 & 客户白名单】：多盘无缝切换，列表 100% 纯净精准。
 """
 
@@ -14,10 +14,20 @@ import re
 import json
 import shutil
 import hashlib
+import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v5.json")
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_organizer_v6.json")
+
+# 默认 Blender 5.2 路径与母版模板路径
+BLENDER_EXE = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
+if not os.path.exists(BLENDER_EXE):
+    BLENDER_EXE = "blender"
+
+DEFAULT_TEMPLATE = os.path.join(
+    os.path.expanduser("~"), "Desktop", "AI_Blender包装渲染辅助工具", "templates", "Packaging_Master_Template.blend"
+)
 
 DEFAULT_WORKSPACES = []
 for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects", "D:\\", "E:\\"]:
@@ -30,7 +40,11 @@ DEFAULT_CONFIG = {
     "workspaces": DEFAULT_WORKSPACES,
     "current_workspace": DEFAULT_WORKSPACES[0],
     "curated_brands": ["柏缇", "零食有鸣"],
-    "current_brand": "柏缇"
+    "current_brand": "柏缇",
+    "auto_create_blend": True,
+    "auto_open_blender": True,
+    "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
+    "blender_exe_path": BLENDER_EXE
 }
 
 def load_config():
@@ -54,7 +68,6 @@ def save_config(cfg):
 
 
 def get_file_md5(filepath):
-    """计算文件 MD5 哈希值，用于秒级查重"""
     try:
         h = hashlib.md5()
         with open(filepath, 'rb') as f:
@@ -72,19 +85,11 @@ JUNK_NAME_KEYWORDS = {
 }
 
 def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
-    """
-    智能去增量、去噪声，提取项目主干身份：
-    例1：柏缇零食有鸣定制 (1).ai -> 品牌: 柏缇, SKU: 零食有鸣定制
-    例2：柏缇零食有鸣定制 - 副本 (2).ai -> 品牌: 柏缇, SKU: 零食有鸣定制
-    例3：洗衣液（1）.ai -> 品牌: fallback, SKU: 洗衣液
-    """
     raw_name = os.path.splitext(os.path.basename(filepath))[0]
     
-    # 1. 剥离 (1), （2）, - 副本 等微信与 Windows 增量后缀
     cleaned_base = re.sub(r'[\(\（]\s*\d+\s*[\)\）]', '', raw_name)
     cleaned_base = re.sub(r'[-_ ]*副本\s*\d*', '', cleaned_base)
     
-    # 2. 剥离行业噪音词
     noise_patterns = [
         r'[-_ ]?(包装|刀模|展开图|正稿|定稿|完稿|原稿|印刷稿|平面|效果图)',
         r'[-_ ]?(修改版|修改|最新版|最终版|最终|定案|终版|初稿|打样|打样稿)',
@@ -97,7 +102,6 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
     cleaned_base = cleaned_base.strip(" -_")
     is_junk = cleaned_base.lower() in JUNK_NAME_KEYWORDS or len(cleaned_base) == 0
     
-    # 3. 提取品牌与 SKU
     brand = ""
     sku = ""
     
@@ -130,11 +134,6 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
 
 
 def get_next_design_version_filename(design_dir, brand, sku, ext, source_md5=None):
-    """
-    检查 01_Design_平面原稿/ 中的已有文件：
-    1. 查重：若发现 MD5 相同文件，返回 (None, True, 已有文件名)
-    2. 计算下一个版本号 (如 _v01.ai -> _v02.ai)
-    """
     if not os.path.exists(design_dir):
         return f"{sku}_v01{ext}", False, ""
         
@@ -142,15 +141,13 @@ def get_next_design_version_filename(design_dir, brand, sku, ext, source_md5=Non
     if not existing_files:
         return f"{sku}_v01{ext}", False, ""
         
-    # MD5 查重检测
     if source_md5:
         for ef in existing_files:
             ef_path = os.path.join(design_dir, ef)
             if os.path.isfile(ef_path):
                 if get_file_md5(ef_path) == source_md5:
-                    return ef, True, ef  # 100% 重复
+                    return ef, True, ef
                     
-    # 计算版本号
     pattern = re.compile(rf"^{re.escape(sku)}_v(\d+)", re.IGNORECASE)
     max_v = 0
     for ef in existing_files:
@@ -166,16 +163,15 @@ def get_next_design_version_filename(design_dir, brand, sku, ext, source_md5=Non
     if max_v > 0:
         return f"{sku}_v{max_v + 1:02d}{ext}", False, ""
     else:
-        # 已有但未带 _v 标记的文件
         return f"{sku}_v{len(existing_files) + 1:02d}{ext}", False, ""
 
 
 class OrganizerApp:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("📦 包装 AI 文件智能归档器 (v2.5 增量归拢与查重版)")
-        self.root.geometry("860x620")
-        self.root.minsize(760, 520)
+        self.root.title("📦 包装 AI 文件智能归档器 (v2.6 首次创建自动化版)")
+        self.root.geometry("880x660")
+        self.root.minsize(780, 560)
         
         self.cfg = load_config()
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
@@ -183,6 +179,9 @@ class OrganizerApp:
         
         self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
         self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", self.curated_brands[0]))
+        
+        self.auto_create_blend_var = tk.BooleanVar(value=self.cfg.get("auto_create_blend", True))
+        self.auto_open_blender_var = tk.BooleanVar(value=self.cfg.get("auto_open_blender", True))
         
         self.files_data = []
         
@@ -196,10 +195,10 @@ class OrganizerApp:
     def build_ui(self):
         # 1. 顶部控制栏：多工作盘 + 客户白名单
         top_frame = ttk.LabelFrame(self.root, text=" 📂 多工作盘快速切换 & 客户品牌管理 ", padding=10)
-        top_frame.pack(fill=tk.X, padx=15, pady=8)
+        top_frame.pack(fill=tk.X, padx=15, pady=6)
         
         row_dir = ttk.Frame(top_frame)
-        row_dir.pack(fill=tk.X, pady=(0, 8))
+        row_dir.pack(fill=tk.X, pady=(0, 6))
         ttk.Label(row_dir, text="当前主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
         
         self.workspace_combo = ttk.Combobox(
@@ -233,9 +232,32 @@ class OrganizerApp:
         ttk.Button(row_brand, text="📁 点选已有客户文件夹...", command=self.pick_brand_folder).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(row_brand, text="❌ 移除此客户", command=self.remove_brand).pack(side=tk.LEFT)
 
-        # 2. 中间文件列表与智能解析表格
+        # 2. Blender 自动化首次创建配置行
+        b_frame = ttk.LabelFrame(self.root, text=" ⚡ Blender 首次创建自动化 (0 步骤自动建工程) ", padding=8)
+        b_frame.pack(fill=tk.X, padx=15, pady=(0, 6))
+        
+        row_b = ttk.Frame(b_frame)
+        row_b.pack(fill=tk.X)
+        
+        ttk.Checkbutton(
+            row_b,
+            text="✨ 归档时自动生成对应 .blend 工程",
+            variable=self.auto_create_blend_var,
+            command=self.save_blend_options
+        ).pack(side=tk.LEFT, padx=(0, 15))
+        
+        ttk.Checkbutton(
+            row_b,
+            text="🚀 创建后自动启动 Blender 打开工程",
+            variable=self.auto_open_blender_var,
+            command=self.save_blend_options
+        ).pack(side=tk.LEFT, padx=(0, 20))
+        
+        ttk.Button(row_b, text="📁 设置我的默认包装母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
+
+        # 3. 中间文件列表与智能解析表格
         list_frame = ttk.LabelFrame(self.root, text=" 📋 待处理源文件 (自动剔除 (1) (2) 归拢至同项目，支持双击编辑) ", padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 8))
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 6))
         
         cols = ("file", "brand", "sku", "target_dir", "status")
         self.tree = ttk.Treeview(list_frame, columns=cols, show="headings", selectmode="extended")
@@ -259,22 +281,22 @@ class OrganizerApp:
         
         self.tree.bind("<Double-1>", self.on_double_click)
         
-        # 3. 快捷操作栏
+        # 4. 快捷操作栏
         btn_frame = ttk.Frame(self.root, padding=2)
-        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 6))
         
         ttk.Button(btn_frame, text="➕ 添加 AI / 源文件...", command=self.browse_files).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="✏️ 批量应用当前客户至全部", command=self.apply_current_brand_to_all).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="❌ 移除选中文件", command=self.remove_selected).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="🧹 清空列表", command=self.clear_all).pack(side=tk.LEFT)
         
-        # 4. 底部执行大按钮
-        exec_frame = ttk.Frame(self.root, padding=8)
-        exec_frame.pack(fill=tk.X, padx=15, pady=(0, 12))
+        # 5. 底部执行大按钮
+        exec_frame = ttk.Frame(self.root, padding=6)
+        exec_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         
         self.btn_exec = tk.Button(
             exec_frame,
-            text="🚀 【 一键创建/归拢项目并规范版本命名 】",
+            text="🚀 【 一键创建工业级标准项目、生成 .blend 并自动开工 】",
             font=("Microsoft YaHei", 11, "bold"),
             bg="#0078D7",
             fg="white",
@@ -285,6 +307,21 @@ class OrganizerApp:
             command=self.execute_organize
         )
         self.btn_exec.pack(fill=tk.X)
+
+    def save_blend_options(self):
+        self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
+        self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
+        save_config(self.cfg)
+
+    def set_custom_template(self):
+        f = filedialog.askopenfilename(
+            title="选择你的默认包装 Blender 母版工程 (.blend)",
+            filetypes=[("Blender 工程文件", "*.blend"), ("所有文件", "*.*")]
+        )
+        if f:
+            self.cfg["template_blend_path"] = f
+            save_config(self.cfg)
+            messagebox.showinfo("设置成功", f"已成功将默认母版设为:\n{os.path.basename(f)}")
 
     def update_workspace_combo(self):
         self.workspace_combo["values"] = self.workspaces
@@ -403,7 +440,7 @@ class OrganizerApp:
             brand = item["brand"]
             sku = item["sku"]
             target_proj = f"{brand}/{sku}" if brand else sku
-            status = "⚠️需确认" if item["is_junk"] else "✅智能归拢"
+            status = "⚠️需确认" if item["is_junk"] else "✅就绪"
             self.tree.insert("", tk.END, values=(item["filename"], brand, sku, target_proj, status))
 
     def browse_files(self):
@@ -416,8 +453,6 @@ class OrganizerApp:
 
     def add_files(self, filepaths):
         cur_brand = self.current_brand_var.get().strip()
-        cur_ws = self.current_workspace_var.get().strip()
-        
         for fp in filepaths:
             fp = os.path.abspath(fp)
             if not os.path.exists(fp) or not os.path.isfile(fp):
@@ -507,7 +542,8 @@ class OrganizerApp:
         
         success_count = 0
         duplicate_count = 0
-        last_created_dir = ""
+        last_created_blend_path = ""
+        last_created_proj_dir = ""
         
         subfolders = [
             "01_Design_平面原稿",
@@ -516,6 +552,13 @@ class OrganizerApp:
             "04_Renders_通道输出",
             "05_Delivery_最终交付"
         ]
+        
+        template_blend = self.cfg.get("template_blend_path", "")
+        if not template_blend or not os.path.exists(template_blend):
+            template_blend = DEFAULT_TEMPLATE
+            
+        auto_create_blend = self.auto_create_blend_var.get()
+        auto_open_blender = self.auto_open_blender_var.get()
         
         for item in self.files_data:
             brand = item["brand"].strip()
@@ -526,47 +569,65 @@ class OrganizerApp:
             else:
                 proj_dir = os.path.join(root_dir, sku)
                 
-            # 1. 确保统一项目主干下的五级目录存在
             for sub in subfolders:
                 os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
                 
             design_dir = os.path.join(proj_dir, "01_Design_平面原稿")
             ext = os.path.splitext(item["filename"])[1]
             
-            # 2. 查重与规范化版本命名
             dest_file_name, is_duplicate, dup_name = get_next_design_version_filename(
                 design_dir, brand, sku, ext, source_md5=item.get("md5")
             )
             
             if is_duplicate:
-                print(f"Skipping duplicate file: {item['filename']} matches existing {dup_name}")
                 duplicate_count += 1
-                last_created_dir = proj_dir
+                last_created_proj_dir = proj_dir
                 continue
                 
             dest_file_path = os.path.join(design_dir, dest_file_name)
             try:
                 shutil.copy2(item["filepath"], dest_file_path)
                 success_count += 1
-                last_created_dir = proj_dir
+                last_created_proj_dir = proj_dir
             except Exception as e:
                 print(f"Error copying {item['filepath']}: {e}")
                 
-        # 3. 汇总反馈
+            # 自动生成 03_3D_三维工程\[SKU].blend
+            if auto_create_blend:
+                target_blend = os.path.join(proj_dir, "03_3D_三维工程", f"{sku}.blend")
+                if not os.path.exists(target_blend) and template_blend and os.path.exists(template_blend):
+                    try:
+                        shutil.copy2(template_blend, target_blend)
+                        last_created_blend_path = target_blend
+                    except Exception as e:
+                        print(f"Error cloning blend template: {e}")
+                elif os.path.exists(target_blend):
+                    last_created_blend_path = target_blend
+                    
+        # 结果反馈与自动启动 Blender
         msg_parts = []
         if success_count > 0:
             msg_parts.append(f"✅ 成功归档/增量录入 {success_count} 个版本！")
+            if auto_create_blend:
+                msg_parts.append("✨ 自动初始化了对应的 3D Blender 工程！")
         if duplicate_count > 0:
             msg_parts.append(f"ℹ️ 自动识别并跳过 {duplicate_count} 个微信完全重复接收的文件。")
             
-        if success_count > 0 or duplicate_count > 0:
-            if last_created_dir and os.path.exists(last_created_dir):
-                try:
-                    os.startfile(last_created_dir)
-                except Exception:
-                    pass
-            messagebox.showinfo("🎉 处理完成", "\n".join(msg_parts))
-            self.clear_all()
+        if auto_open_blender and last_created_blend_path and os.path.exists(last_created_blend_path):
+            blender_bin = self.cfg.get("blender_exe_path", BLENDER_EXE)
+            try:
+                subprocess.Popen([blender_bin, last_created_blend_path])
+                msg_parts.append(f"🚀 已自动启动 Blender 5.2 打开工程: [{os.path.basename(last_created_blend_path)}]")
+            except Exception as e:
+                os.startfile(last_created_blend_path)
+        elif last_created_proj_dir and os.path.exists(last_created_proj_dir):
+            try:
+                os.startfile(last_created_proj_dir)
+            except Exception:
+                pass
+                
+        messagebox.showinfo("🎉 处理完成", "\n".join(msg_parts))
+        self.clear_all()
 
 
 if __name__ == "__main__":
