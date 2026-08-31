@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-包装设计与视觉资产综合中枢 (Packaging Studio Suite - v6.5 温润工业石墨灰护眼版)
-重点重构：
-1. 【温润工业暗灰设计 (Studio Graphite Warm Dark)】：
-   - 彻底废除刺眼的纯黑/高反差死黑，全面升级为类似 Blender / Lightroom / Eagle 的工业级温润石墨灰调 (#24262B ~ #32353B)；
-   - 柔和防眩光设计：文字采用护眼米白 (#E2E4E8)，低饱和度雅致色彩徽标，输入框全面暗化，与白色渲染图自然融合，长时间使用眼睛极度舒适。
-2. 【零延迟瞬切架构 (Instant Turbo)】：
-   - 磁盘持久化缩略图池 (15KB JPEG) + 30 卡片槽位复用池 (Widget Pool)，切换分类 < 5ms。
-3. 【四大核心业务分类 & Beauty 封面】：
-   - 📦 包装 (100% 默认兜底) / 🎁 套盒 / 🖼️ 海报 / 📑 物料。
+包装设计与视觉资产综合中枢 (Packaging Studio Suite - v7.0 自定义文件夹规则旗舰版)
+重大功能升级：
+1. 【多维度自定义文件夹归档规则 (Custom Folder Rules Manager)】：
+   - 支持自由创建、编辑、克隆、删除多套文件夹结构规则；
+   - 支持自定义子文件夹列表（如 5 阶段流、海报 KV 流、物料制作流、极简 3 目录流等）；
+   - 支持自定义路径组织架构（{客户}/{SKU}、{业务形态}/{客户}/{SKU}、{仅SKU} 等）；
+   - 规则内可视化绑定「源文件存放目录」、「3D工程生成目录」与「渲染图输出目录」；
+   - 规则管理器内置实时目录树实时预览。
+2. 【温润工业石墨灰护眼设计 (Studio Graphite Warm Dark)】。
+3. 【零延迟瞬切架构 (Instant Turbo)】：磁盘持久化 15KB JPEG 缩略图池 + 30 槽位复用池。
+4. 【四大核心业务分类 & Beauty 封面】。
 """
 
 import os
@@ -30,7 +32,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk, ImageDraw
 import openpyxl
 
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v6.json")
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".packaging_asset_thumbnails")
 EXCEL_CACHE_DIR = os.path.join(CACHE_DIR, "excel_images")
 THUMB_CACHE_DIR = os.path.join(CACHE_DIR, "fast_thumbs")
@@ -71,27 +73,92 @@ SYSTEM_IGNORED_DIRS = {
 
 VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
 
-# 温润工业级调色板 (告别刺眼死黑与荧光蓝)
+# 默认预设的文件夹规则库
+DEFAULT_FOLDER_RULES = [
+    {
+        "id": "standard_packaging_5stage",
+        "name": "📦 标准包装 5 阶段工程 (默认)",
+        "desc": "适用于标准产品包装设计、三维渲染与最终交付的标准工业流",
+        "path_pattern": "{brand}/{sku}",
+        "subfolders": [
+            "01_Design_平面原稿",
+            "02_Textures_贴图资产",
+            "03_3D_三维工程",
+            "04_Renders_通道输出",
+            "05_Delivery_最终交付"
+        ],
+        "design_sub": "01_Design_平面原稿",
+        "blend_sub": "03_3D_三维工程",
+        "render_sub": "04_Renders_通道输出"
+    },
+    {
+        "id": "category_grouped_packaging",
+        "name": "🗂️ 按业务形态分流 (形态/客户/SKU)",
+        "desc": "在工作盘下一级建立【包装/套盒/海报/物料】分类目录，二级为客户，三级为SKU",
+        "path_pattern": "{category}/{brand}/{sku}",
+        "subfolders": [
+            "01_Design_平面原稿",
+            "02_Textures_贴图资产",
+            "03_3D_三维工程",
+            "04_Renders_通道输出",
+            "05_Delivery_最终交付"
+        ],
+        "design_sub": "01_Design_平面原稿",
+        "blend_sub": "03_3D_三维工程",
+        "render_sub": "04_Renders_通道输出"
+    },
+    {
+        "id": "poster_kv_flow",
+        "name": "🖼️ 海报与主视觉 KV 创作流",
+        "desc": "适用于平面海报、主视觉 KV、电商展板等以渲染合成素材为主的工程",
+        "path_pattern": "{brand}/{sku}",
+        "subfolders": [
+            "01_Ref_参考意向",
+            "02_Design_设计原稿",
+            "03_3D_三维模型与场景",
+            "04_Renders_高清分层输出",
+            "05_Final_精修定稿"
+        ],
+        "design_sub": "02_Design_设计原稿",
+        "blend_sub": "03_3D_三维模型与场景",
+        "render_sub": "04_Renders_高清分层输出"
+    },
+    {
+        "id": "simple_3stage",
+        "name": "⚡ 极简轻量 3 目录流",
+        "desc": "适合轻量快速打样与紧急物料制作",
+        "path_pattern": "{brand}/{sku}",
+        "subfolders": [
+            "01_源文件",
+            "02_工程",
+            "03_输出"
+        ],
+        "design_sub": "01_源文件",
+        "blend_sub": "02_工程",
+        "render_sub": "03_输出"
+    }
+]
+
 THEMES = {
     "dark": {
-        "bg": "#222429",               # 柔和深石墨底色
-        "header_bg": "#2A2C32",        # 顶栏底色
-        "sidebar_bg": "#2A2C32",       # 侧边栏底色
-        "panel_bg": "#2A2C32",         # 面板底色
-        "card_bg": "#30333A",          # 卡片微凸底色
-        "card_border": "#3D414A",      # 极细低反差边框
-        "card_hover": "#4C84C4",       # 悬浮高亮色
-        "canvas_bg": "#222429",        # 视口画布底色
-        "thumb_bg": "#27292F",         # 渲染图背景托底色
-        "input_bg": "#1A1B1F",         # 搜索框/下拉框暗色背景
-        "input_fg": "#E2E4E8",         # 输入文字颜色
-        "fg": "#E2E4E8",               # 主文字：温润米白 (防刺眼)
-        "fg_muted": "#9699A2",         # 次级文字：低对比银灰
-        "fg_dim": "#656872",           # 弱化文字
-        "primary": "#3B78B8",          # 雅致靛蓝
+        "bg": "#222429",
+        "header_bg": "#2A2C32",
+        "sidebar_bg": "#2A2C32",
+        "panel_bg": "#2A2C32",
+        "card_bg": "#30333A",
+        "card_border": "#3D414A",
+        "card_hover": "#4C84C4",
+        "canvas_bg": "#222429",
+        "thumb_bg": "#27292F",
+        "input_bg": "#1A1B1F",
+        "input_fg": "#E2E4E8",
+        "fg": "#E2E4E8",
+        "fg_muted": "#9699A2",
+        "fg_dim": "#656872",
+        "primary": "#3B78B8",
         "primary_hover": "#4989CE",
         "primary_fg": "#FFFFFF",
-        "badge_brand_bg": "#3A3D46",   # 品牌微标底色
+        "badge_brand_bg": "#3A3D46",
         "badge_brand_fg": "#B2B6BE",
         "cat_colors": {
             "包装": ("#26384C", "#96C2EC"),
@@ -148,7 +215,9 @@ DEFAULT_CONFIG = {
     "auto_create_blend": True,
     "auto_open_blender": True,
     "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
-    "auto_append_to_excel": True
+    "auto_append_to_excel": True,
+    "folder_rules": DEFAULT_FOLDER_RULES,
+    "active_rule_id": "standard_packaging_5stage"
 }
 
 def load_config():
@@ -159,6 +228,9 @@ def load_config():
                 for k, v in DEFAULT_CONFIG.items():
                     if k not in data:
                         data[k] = v
+                # 检查 rules 是否完整
+                if not data.get("folder_rules"):
+                    data["folder_rules"] = DEFAULT_FOLDER_RULES
                 return data
         except Exception:
             pass
@@ -362,7 +434,10 @@ def find_project_thumbnail(proj_path):
 
     render_dirs = [
         os.path.join(proj_path, "04_Renders_通道输出"),
+        os.path.join(proj_path, "04_Renders_高清分层输出"),
+        os.path.join(proj_path, "03_输出"),
         os.path.join(proj_path, "05_Delivery_最终交付"),
+        os.path.join(proj_path, "05_Final_精修定稿"),
         os.path.join(proj_path, "渲染"),
         os.path.join(proj_path, "Renders"),
         proj_path
@@ -472,7 +547,7 @@ def parse_and_cache_excel(excel_path):
             brand = "柏缇"
             if norm_path:
                 parts = norm_path.strip("\\").split("\\")
-                if len(parts) >= 2 and parts[-2] not in {"zjc", "Projects", "E:", "D:"}:
+                if len(parts) >= 2 and parts[-2] not in {"zjc", "Projects", "E:", "D:", "包装", "套盒", "海报", "物料"}:
                     brand = parts[-2]
 
             projects.append({
@@ -614,11 +689,349 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
     return merged
 
 
+# ==============================================================================
+# 文件夹规则管理器弹窗 (Folder Rules Manager Modal Dialog)
+# ==============================================================================
+class FolderRuleManagerDialog(tk.Toplevel):
+    def __init__(self, parent, rules, active_rule_id, on_save_callback, colors):
+        super().__init__(parent)
+        self.title("⚙️ 自定义文件夹归档规则管理器")
+        self.geometry("820x620")
+        self.minsize(720, 520)
+        self.colors = colors
+        self.configure(bg=colors["bg"])
+        self.transient(parent)
+        self.grab_set()
+        
+        self.rules = [dict(r) for r in rules]  # deep copy
+        self.active_rule_id = active_rule_id
+        self.on_save_callback = on_save_callback
+        self.current_rule_idx = 0
+        
+        # 寻找当前激活的规则索引
+        for i, r in enumerate(self.rules):
+            if r.get("id") == self.active_rule_id:
+                self.current_rule_idx = i
+                break
+                
+        self.build_ui()
+        self.load_rule_to_editor(self.current_rule_idx)
+
+    def build_ui(self):
+        c = self.colors
+        
+        # 主布局左右分栏
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
+        
+        # 左侧：规则列表
+        left_frame = ttk.LabelFrame(paned, text=" 📂 规则库列表 ", padding=8, width=240)
+        paned.add(left_frame, weight=1)
+        
+        self.rule_listbox = tk.Listbox(
+            left_frame,
+            font=("Microsoft YaHei", 9),
+            bg=c["panel_bg"],
+            fg=c["fg"],
+            selectbackground=c["primary"],
+            selectforeground="#FFFFFF",
+            relief=tk.FLAT,
+            highlightthickness=0,
+            activestyle="none"
+        )
+        self.rule_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.rule_listbox.bind("<<ListboxSelect>>", self.on_select_rule_list)
+        
+        left_btn_row = ttk.Frame(left_frame)
+        left_btn_row.pack(fill=tk.X)
+        ttk.Button(left_btn_row, text="➕ 新建", width=6, command=self.add_new_rule).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(left_btn_row, text="📋 复制", width=6, command=self.duplicate_rule).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(left_btn_row, text="🗑️ 删除", width=6, command=self.delete_rule).pack(side=tk.LEFT)
+        
+        # 右侧：规则编辑器
+        right_frame = ttk.LabelFrame(paned, text=" 🛠️ 规则详细配置与目录树预览 ", padding=12)
+        paned.add(right_frame, weight=3)
+        
+        # 1. 规则名称 & 描述
+        f_info = ttk.Frame(right_frame)
+        f_info.pack(fill=tk.X, pady=(0, 8))
+        
+        ttk.Label(f_info, text="规则名称:").grid(row=0, column=0, sticky="w", pady=3)
+        self.name_var = tk.StringVar()
+        ttk.Entry(f_info, textvariable=self.name_var, width=32, font=("Microsoft YaHei", 9, "bold")).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=3)
+        
+        ttk.Label(f_info, text="规则说明:").grid(row=1, column=0, sticky="w", pady=3)
+        self.desc_var = tk.StringVar()
+        ttk.Entry(f_info, textvariable=self.desc_var, width=32).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=3)
+        f_info.columnconfigure(1, weight=1)
+        
+        # 2. 根路径层级组织
+        f_pattern = ttk.Frame(right_frame)
+        f_pattern.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(f_pattern, text="目录层级架构:").pack(side=tk.LEFT, padx=(0, 8))
+        self.pattern_var = tk.StringVar(value="{brand}/{sku}")
+        self.combo_pattern = ttk.Combobox(
+            f_pattern,
+            textvariable=self.pattern_var,
+            values=[
+                "{brand}/{sku} (推荐：工作盘/客户/SKU)",
+                "{category}/{brand}/{sku} (工作盘/业务形态/客户/SKU)",
+                "{sku} (工作盘/仅SKU目录)"
+            ],
+            state="readonly",
+            width=36
+        )
+        self.combo_pattern.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.combo_pattern.bind("<<ComboboxSelected>>", lambda e: self.update_tree_preview())
+
+        # 3. 子文件夹列表编辑
+        f_subs = ttk.LabelFrame(right_frame, text=" 📁 子文件夹清单 (每行一个文件夹，将自动按顺序创建) ", padding=8)
+        f_subs.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        
+        self.txt_subs = tk.Text(
+            f_subs,
+            height=6,
+            font=("Consolas", 10),
+            bg=c["input_bg"],
+            fg=c["input_fg"],
+            insertbackground=c["fg"],
+            relief=tk.FLAT,
+            bd=1
+        )
+        self.txt_subs.pack(fill=tk.BOTH, expand=True)
+        self.txt_subs.bind("<KeyRelease>", lambda e: self.on_subs_text_changed())
+
+        # 4. 自动分流关联设置
+        f_mapping = ttk.Frame(right_frame)
+        f_mapping.pack(fill=tk.X, pady=(0, 8))
+        
+        ttk.Label(f_mapping, text="源文件存入:").grid(row=0, column=0, sticky="w", pady=3)
+        self.design_sub_var = tk.StringVar()
+        self.combo_design = ttk.Combobox(f_mapping, textvariable=self.design_sub_var, width=22)
+        self.combo_design.grid(row=0, column=1, sticky="w", padx=(6, 16), pady=3)
+        
+        ttk.Label(f_mapping, text="3D工程生成于:").grid(row=0, column=2, sticky="w", pady=3)
+        self.blend_sub_var = tk.StringVar()
+        self.combo_blend = ttk.Combobox(f_mapping, textvariable=self.blend_sub_var, width=22)
+        self.combo_blend.grid(row=0, column=3, sticky="w", padx=(6, 0), pady=3)
+
+        ttk.Label(f_mapping, text="渲染图输出于:").grid(row=1, column=0, sticky="w", pady=3)
+        self.render_sub_var = tk.StringVar()
+        self.combo_render = ttk.Combobox(f_mapping, textvariable=self.render_sub_var, width=22)
+        self.combo_render.grid(row=1, column=1, sticky="w", padx=(6, 16), pady=3)
+        
+        # 5. 实时效果预览
+        f_prev = ttk.LabelFrame(right_frame, text=" 🌲 生成目录效果实时预览 ", padding=6)
+        f_prev.pack(fill=tk.X, pady=(0, 8))
+        
+        self.lbl_preview = tk.Label(
+            f_prev,
+            text="",
+            font=("Consolas", 9),
+            bg=c["panel_bg"],
+            fg=c["fg_muted"],
+            justify="left",
+            anchor="w",
+            padx=6,
+            pady=4
+        )
+        self.lbl_preview.pack(fill=tk.X)
+
+        # 底部保存按钮行
+        b_bar = ttk.Frame(self, padding=(16, 8))
+        b_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        ttk.Button(b_bar, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
+        btn_apply = tk.Button(
+            b_bar,
+            text="💾 保存并设为当前活动规则",
+            font=("Microsoft YaHei", 9, "bold"),
+            bg=c["primary"],
+            fg="#FFFFFF",
+            relief=tk.FLAT,
+            padx=16,
+            pady=6,
+            command=self.save_and_apply
+        )
+        btn_apply.pack(side=tk.RIGHT)
+        
+        self.refresh_rule_listbox()
+
+    def refresh_rule_listbox(self):
+        self.rule_listbox.delete(0, tk.END)
+        for i, r in enumerate(self.rules):
+            active_mark = " (当前)" if r.get("id") == self.active_rule_id else ""
+            self.rule_listbox.insert(tk.END, f"{r.get('name', '未命名规则')}{active_mark}")
+            
+        if 0 <= self.current_rule_idx < len(self.rules):
+            self.rule_listbox.select_set(self.current_rule_idx)
+
+    def load_rule_to_editor(self, idx):
+        if not (0 <= idx < len(self.rules)):
+            return
+        self.current_rule_idx = idx
+        r = self.rules[idx]
+        
+        self.name_var.set(r.get("name", ""))
+        self.desc_var.set(r.get("desc", ""))
+        
+        pat = r.get("path_pattern", "{brand}/{sku}")
+        if "{category}" in pat:
+            self.combo_pattern.current(1)
+        elif "{brand}" in pat:
+            self.combo_pattern.current(0)
+        else:
+            self.combo_pattern.current(2)
+            
+        subs = r.get("subfolders", [])
+        self.txt_subs.delete("1.0", tk.END)
+        self.txt_subs.insert(tk.END, "\n".join(subs))
+        
+        self.on_subs_text_changed(initial=True)
+        self.design_sub_var.set(r.get("design_sub", subs[0] if subs else ""))
+        self.blend_sub_var.set(r.get("blend_sub", subs[2] if len(subs) > 2 else (subs[0] if subs else "")))
+        self.render_sub_var.set(r.get("render_sub", subs[3] if len(subs) > 3 else (subs[0] if subs else "")))
+        
+        self.update_tree_preview()
+
+    def save_current_editor_to_memory(self):
+        if not (0 <= self.current_rule_idx < len(self.rules)):
+            return
+        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
+        pat_raw = self.combo_pattern.get()
+        if "{category}" in pat_raw:
+            pat = "{category}/{brand}/{sku}"
+        elif "{brand}" in pat_raw:
+            pat = "{brand}/{sku}"
+        else:
+            pat = "{sku}"
+            
+        r = self.rules[self.current_rule_idx]
+        r["name"] = self.name_var.get().strip() or "自定义规则"
+        r["desc"] = self.desc_var.get().strip()
+        r["path_pattern"] = pat
+        r["subfolders"] = subs
+        r["design_sub"] = self.design_sub_var.get().strip() or (subs[0] if subs else "")
+        r["blend_sub"] = self.blend_sub_var.get().strip() or (subs[2] if len(subs) > 2 else (subs[0] if subs else ""))
+        r["render_sub"] = self.render_sub_var.get().strip() or (subs[3] if len(subs) > 3 else (subs[0] if subs else ""))
+
+    def on_select_rule_list(self, event=None):
+        sel = self.rule_listbox.curselection()
+        if not sel:
+            return
+        self.save_current_editor_to_memory()
+        self.load_rule_to_editor(sel[0])
+
+    def on_subs_text_changed(self, initial=False):
+        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
+        self.combo_design["values"] = subs
+        self.combo_blend["values"] = subs
+        self.combo_render["values"] = subs
+        
+        if not initial:
+            if subs:
+                if self.design_sub_var.get() not in subs:
+                    self.design_sub_var.set(subs[0])
+                if self.blend_sub_var.get() not in subs:
+                    self.blend_sub_var.set(subs[2] if len(subs) > 2 else subs[0])
+                if self.render_sub_var.get() not in subs:
+                    self.render_sub_var.set(subs[3] if len(subs) > 3 else (subs[-1] if subs else ""))
+            self.update_tree_preview()
+
+    def update_tree_preview(self):
+        pat_raw = self.combo_pattern.get()
+        if "{category}" in pat_raw:
+            base_dir = "E:\\zjc\\包装\\柏缇\\玫瑰水乳"
+        elif "{brand}" in pat_raw:
+            base_dir = "E:\\zjc\\柏缇\\玫瑰水乳"
+        else:
+            base_dir = "E:\\zjc\\玫瑰水乳"
+            
+        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
+        d_sub = self.design_sub_var.get()
+        b_sub = self.blend_sub_var.get()
+        r_sub = self.render_sub_var.get()
+        
+        lines = [f"📁 {base_dir}"]
+        for i, s in enumerate(subs):
+            prefix = "└── " if i == len(subs) - 1 else "├── "
+            tags = []
+            if s == d_sub:
+                tags.append("📥 源文件归档处")
+            if s == b_sub:
+                tags.append("✨ 自动生成.blend")
+            if s == r_sub:
+                tags.append("🖼️ 渲染图封面来源")
+            tag_str = f"  <-- [{' | '.join(tags)}]" if tags else ""
+            lines.append(f"{prefix}📁 {s}{tag_str}")
+            
+        if not subs:
+            lines.append("└── ⚠️ (请在上方输入至少一个子目录名称)")
+            
+        self.lbl_preview.config(text="\n".join(lines))
+
+    def add_new_rule(self):
+        self.save_current_editor_to_memory()
+        new_id = f"custom_rule_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        new_rule = {
+            "id": new_id,
+            "name": f"✨ 自定义规则 {len(self.rules) + 1}",
+            "desc": "用户自定义的个性化文件夹结构规则",
+            "path_pattern": "{brand}/{sku}",
+            "subfolders": ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"],
+            "design_sub": "01_Design_平面原稿",
+            "blend_sub": "03_3D_三维工程",
+            "render_sub": "04_Renders_通道输出"
+        }
+        self.rules.append(new_rule)
+        self.current_rule_idx = len(self.rules) - 1
+        self.refresh_rule_listbox()
+        self.load_rule_to_editor(self.current_rule_idx)
+
+    def duplicate_rule(self):
+        if not (0 <= self.current_rule_idx < len(self.rules)):
+            return
+        self.save_current_editor_to_memory()
+        cur = self.rules[self.current_rule_idx]
+        new_id = f"custom_rule_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        new_rule = dict(cur)
+        new_rule["id"] = new_id
+        new_rule["name"] = f"{cur.get('name', '规则')} (副本)"
+        new_rule["subfolders"] = list(cur.get("subfolders", []))
+        self.rules.append(new_rule)
+        self.current_rule_idx = len(self.rules) - 1
+        self.refresh_rule_listbox()
+        self.load_rule_to_editor(self.current_rule_idx)
+
+    def delete_rule(self):
+        if len(self.rules) <= 1:
+            messagebox.showwarning("提示", "必须至少保留一个文件夹归档规则！")
+            return
+        r = self.rules[self.current_rule_idx]
+        if messagebox.askyesno("确认删除", f"确定要删除规则【{r.get('name')}】吗？"):
+            del self.rules[self.current_rule_idx]
+            if self.active_rule_id == r.get("id"):
+                self.active_rule_id = self.rules[0]["id"]
+            self.current_rule_idx = max(0, self.current_rule_idx - 1)
+            self.refresh_rule_listbox()
+            self.load_rule_to_editor(self.current_rule_idx)
+
+    def save_and_apply(self):
+        self.save_current_editor_to_memory()
+        cur = self.rules[self.current_rule_idx]
+        self.active_rule_id = cur.get("id")
+        self.on_save_callback(self.rules, self.active_rule_id)
+        self.destroy()
+
+
+# ==============================================================================
+# 主应用程序 (Main Packaging Studio Suite)
+# ==============================================================================
 class PackagingStudioSuite:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v6.5 温润灰调版)")
-        self.root.geometry("1240x820")
+        self.root.title("Packaging Studio Suite - 包装设计与视觉资产中枢 (v7.0 自定义规则版)")
+        self.root.geometry("1260x830")
         self.root.minsize(1020, 660)
         
         self.cfg = load_config()
@@ -632,6 +1045,12 @@ class PackagingStudioSuite:
             cur_ws = self.workspaces[0]
         self.current_workspace_var = tk.StringVar(value=cur_ws)
         self.excel_path_var = tk.StringVar(value=self.cfg.get("excel_path", DEFAULT_EXCEL_PATH))
+        
+        # 文件夹规则库
+        self.folder_rules = self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES)
+        self.active_rule_id = self.cfg.get("active_rule_id", "standard_packaging_5stage")
+        self.active_rule_name_var = tk.StringVar()
+        self.update_active_rule_name_var()
         
         # 归档页变量
         self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
@@ -673,6 +1092,21 @@ class PackagingStudioSuite:
         else:
             self.notebook.select(0)
 
+    def update_active_rule_name_var(self):
+        for r in self.folder_rules:
+            if r.get("id") == self.active_rule_id:
+                self.active_rule_name_var.set(r.get("name", "标准规则"))
+                return
+        if self.folder_rules:
+            self.active_rule_id = self.folder_rules[0]["id"]
+            self.active_rule_name_var.set(self.folder_rules[0]["name"])
+
+    def get_current_folder_rule(self):
+        for r in self.folder_rules:
+            if r.get("id") == self.active_rule_id:
+                return r
+        return self.folder_rules[0] if self.folder_rules else DEFAULT_FOLDER_RULES[0]
+
     def load_app_icon(self):
         if os.path.exists(APP_ICON_ICO):
             try:
@@ -711,7 +1145,6 @@ class PackagingStudioSuite:
         
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
         
-        # 按钮样式（温和不刺眼）
         style.configure("TButton", background=c["btn_secondary_bg"], foreground=c["btn_secondary_fg"], font=("Microsoft YaHei", 9), padding=[8, 4], borderwidth=0)
         style.map("TButton",
                   background=[("active", c["primary"]), ("pressed", c["primary"])],
@@ -720,7 +1153,6 @@ class PackagingStudioSuite:
         style.configure("Primary.TButton", background=c["primary"], foreground="#FFFFFF", font=("Microsoft YaHei", 9, "bold"), padding=[10, 5], borderwidth=0)
         style.map("Primary.TButton", background=[("active", c["primary_hover"])])
         
-        # 搜索输入框与下拉框样式（深色温和）
         style.configure("TEntry", fieldbackground=c["input_bg"], foreground=c["input_fg"], insertcolor=c["fg"], bordercolor=c["card_border"])
         style.configure("TCombobox", fieldbackground=c["input_bg"], background=c["btn_secondary_bg"], foreground=c["input_fg"], bordercolor=c["card_border"], arrowcolor=c["fg_muted"])
         style.map("TCombobox", fieldbackground=[("readonly", c["input_bg"])], foreground=[("readonly", c["input_fg"])])
@@ -886,7 +1318,6 @@ class PackagingStudioSuite:
                 highlightbackground=c["card_border"]
             )
             
-            # 渲染图带柔和底框，防止白色渲染图突兀刺眼
             img_lbl = tk.Label(card, bg=c["thumb_bg"], cursor="hand2")
             img_lbl.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
             
@@ -933,9 +1364,10 @@ class PackagingStudioSuite:
     def build_organizer_ui(self, parent):
         c = self.colors
         
-        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户与形态分类 ", padding=10)
+        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户、分类与归档文件夹规则 ", padding=10)
         top_frame.pack(fill=tk.X, padx=16, pady=8)
         
+        # 行 1: 主工作盘
         row_dir = ttk.Frame(top_frame)
         row_dir.pack(fill=tk.X, pady=(0, 6))
         ttk.Label(row_dir, text="主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
@@ -950,6 +1382,7 @@ class PackagingStudioSuite:
         self.ws_combo_org.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         ttk.Button(row_dir, text="➕ 绑定新工作盘...", command=self.add_workspace).pack(side=tk.LEFT)
         
+        # 行 2: 客户、形态与【自定义文件夹规则】
         row_brand = ttk.Frame(top_frame)
         row_brand.pack(fill=tk.X)
         ttk.Label(row_brand, text="指定客户:").pack(side=tk.LEFT, padx=(0, 6))
@@ -958,23 +1391,38 @@ class PackagingStudioSuite:
             textvariable=self.current_brand_var,
             values=self.curated_brands,
             state="readonly",
-            width=16,
+            width=14,
             font=("Microsoft YaHei", 9)
         )
-        self.brand_combo_org.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(row_brand, text="➕ 新增客户...", command=self.add_brand).pack(side=tk.LEFT, padx=(0, 10))
+        self.brand_combo_org.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(row_brand, text="➕", width=3, command=self.add_brand).pack(side=tk.LEFT, padx=(0, 10))
         
-        ttk.Label(row_brand, text="🏷️ 默认业务形态:").pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Label(row_brand, text="🏷️ 业务形态:").pack(side=tk.LEFT, padx=(4, 4))
         self.cat_combo_org = ttk.Combobox(
             row_brand,
             textvariable=self.current_cat_var,
             values=VALID_CATEGORIES,
             state="readonly",
-            width=10,
+            width=8,
             font=("Microsoft YaHei", 9)
         )
-        self.cat_combo_org.pack(side=tk.LEFT, padx=(0, 8))
+        self.cat_combo_org.pack(side=tk.LEFT, padx=(0, 10))
         self.cat_combo_org.bind("<<ComboboxSelected>>", lambda e: self.save_cfg_all())
+
+        # 🌟 自定义文件夹规则选择器与管理入口
+        ttk.Label(row_brand, text="📁 归档规则:").pack(side=tk.LEFT, padx=(4, 4))
+        self.combo_rule = ttk.Combobox(
+            row_brand,
+            textvariable=self.active_rule_name_var,
+            values=[r["name"] for r in self.folder_rules],
+            state="readonly",
+            width=24,
+            font=("Microsoft YaHei", 9)
+        )
+        self.combo_rule.pack(side=tk.LEFT, padx=(0, 6))
+        self.combo_rule.bind("<<ComboboxSelected>>", self.on_rule_combo_selected)
+        
+        ttk.Button(row_brand, text="⚙️ 自定义规则...", command=self.open_rule_manager).pack(side=tk.LEFT)
 
         # 2. 自动化存盘与同步选项
         b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与 Excel 双向同步设置 ", padding=8)
@@ -987,7 +1435,7 @@ class PackagingStudioSuite:
         ttk.Button(row_b, text="📁 设置母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
 
         # 3. 待处理列表
-        list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的设计源文件 (自动识别 4 大分类，双击可自由修改) ", padding=10)
+        list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的设计源文件 (按当前规则自动映射路径，双击可自由微调) ", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
         
         cols = ("file", "brand", "sku", "cat", "target_dir", "status")
@@ -1003,7 +1451,7 @@ class PackagingStudioSuite:
         self.tree_org.column("brand", width=100, anchor="center")
         self.tree_org.column("sku", width=160, anchor="w")
         self.tree_org.column("cat", width=90, anchor="center")
-        self.tree_org.column("target_dir", width=180, anchor="w")
+        self.tree_org.column("target_dir", width=200, anchor="w")
         self.tree_org.column("status", width=80, anchor="center")
         
         scroll_org = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree_org.yview)
@@ -1025,7 +1473,7 @@ class PackagingStudioSuite:
         exec_frame.pack(fill=tk.X, padx=16, pady=(0, 10))
         btn_exec = tk.Button(
             exec_frame,
-            text="🚀 【 一键创建工业级标准项目、同步写入 Excel 并自动开工 】",
+            text="🚀 【 按当前文件夹规则一键创建项目、同步写入 Excel 并自动开工 】",
             font=("Microsoft YaHei", 11, "bold"),
             bg=c["primary"],
             fg="#FFFFFF",
@@ -1038,6 +1486,48 @@ class PackagingStudioSuite:
         )
         btn_exec.pack(fill=tk.X)
 
+    # ---------------- 规则联动与管理 ----------------
+    def on_rule_combo_selected(self, event=None):
+        name = self.active_rule_name_var.get()
+        for r in self.folder_rules:
+            if r.get("name") == name:
+                self.active_rule_id = r.get("id")
+                break
+        self.save_cfg_all()
+        self.refresh_organizer_table()
+
+    def open_rule_manager(self):
+        FolderRuleManagerDialog(
+            parent=self.root,
+            rules=self.folder_rules,
+            active_rule_id=self.active_rule_id,
+            on_save_callback=self.on_rules_updated,
+            colors=self.colors
+        )
+
+    def on_rules_updated(self, new_rules, new_active_id):
+        self.folder_rules = new_rules
+        self.active_rule_id = new_active_id
+        self.cfg["folder_rules"] = self.folder_rules
+        self.cfg["active_rule_id"] = self.active_rule_id
+        save_config(self.cfg)
+        
+        self.combo_rule["values"] = [r["name"] for r in self.folder_rules]
+        self.update_active_rule_name_var()
+        self.refresh_organizer_table()
+        messagebox.showinfo("规则已更新", f"已成功切换并应用规则:\n【{self.active_rule_name_var.get()}】")
+
+    def compute_target_relative_dir(self, brand, sku, cat):
+        rule = self.get_current_folder_rule()
+        pat = rule.get("path_pattern", "{brand}/{sku}")
+        if "{category}" in pat:
+            rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
+        elif "{brand}" in pat:
+            rel = f"{brand}/{sku}" if brand else sku
+        else:
+            rel = sku
+        return rel
+
     # ---------------- 逻辑与事件处理 ----------------
     def save_cfg_all(self):
         self.cfg["current_workspace"] = self.current_workspace_var.get()
@@ -1046,6 +1536,8 @@ class PackagingStudioSuite:
         self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
         self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
         self.cfg["auto_append_to_excel"] = self.auto_append_excel_var.get()
+        self.cfg["folder_rules"] = self.folder_rules
+        self.cfg["active_rule_id"] = self.active_rule_id
         save_config(self.cfg)
 
     def add_workspace(self):
@@ -1111,9 +1603,9 @@ class PackagingStudioSuite:
             brand = item["brand"]
             sku = item["sku"]
             cat = item.get("cat", "包装")
-            target_proj = f"{brand}/{sku}" if brand else sku
+            target_rel = self.compute_target_relative_dir(brand, sku, cat)
             status = "⚠️需确认" if item["is_junk"] else "✅就绪"
-            self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, cat, target_proj, status))
+            self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, cat, target_rel, status))
 
     def browse_files_for_org(self):
         files = filedialog.askopenfilenames(title="选择设计源文件", filetypes=[("包装设计文件", "*.ai;*.pdf;*.psd;*.zip;*.rar;*.eps"), ("所有文件", "*.*")])
@@ -1196,6 +1688,11 @@ class PackagingStudioSuite:
                 return
                 
         self.save_cfg_all()
+        rule = self.get_current_folder_rule()
+        subfolders = rule.get("subfolders", ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"])
+        design_sub = rule.get("design_sub", subfolders[0] if subfolders else "")
+        blend_sub = rule.get("blend_sub", subfolders[2] if len(subfolders) > 2 else (subfolders[0] if subfolders else ""))
+        
         template_blend = self.cfg.get("template_blend_path", "")
         if not template_blend or not os.path.exists(template_blend):
             template_blend = DEFAULT_TEMPLATE
@@ -1205,7 +1702,6 @@ class PackagingStudioSuite:
         auto_append_excel = self.auto_append_excel_var.get()
         excel_path = self.excel_path_var.get().strip()
         
-        subfolders = ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"]
         success_count = 0
         duplicate_count = 0
         excel_appended_count = 0
@@ -1216,14 +1712,18 @@ class PackagingStudioSuite:
             brand = item["brand"].strip()
             sku = item["sku"].strip() if item["sku"].strip() else os.path.splitext(item["filename"])[0]
             cat = normalize_category(item.get("cat", "包装"))
-            proj_dir = os.path.join(root_dir, brand, sku) if brand else os.path.join(root_dir, sku)
             
+            target_rel = self.compute_target_relative_dir(brand, sku, cat)
+            proj_dir = os.path.join(root_dir, target_rel.replace("/", "\\"))
+            
+            # 按照用户规则创建所有子文件夹
             for sub in subfolders:
                 os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
                 
-            design_dir = os.path.join(proj_dir, "01_Design_平面原稿")
-            ext = os.path.splitext(item["filename"])[1]
+            design_dir = os.path.join(proj_dir, design_sub) if design_sub else proj_dir
+            os.makedirs(design_dir, exist_ok=True)
             
+            ext = os.path.splitext(item["filename"])[1]
             existing_files = os.listdir(design_dir) if os.path.exists(design_dir) else []
             is_dup = False
             if item.get("md5"):
@@ -1244,8 +1744,10 @@ class PackagingStudioSuite:
             except Exception as e:
                 print(f"Error copying: {e}")
                 
-            if auto_create_blend:
-                target_blend = os.path.join(proj_dir, "03_3D_三维工程", f"{sku}.blend")
+            if auto_create_blend and blend_sub:
+                target_blend_dir = os.path.join(proj_dir, blend_sub)
+                os.makedirs(target_blend_dir, exist_ok=True)
+                target_blend = os.path.join(target_blend_dir, f"{sku}.blend")
                 if not os.path.exists(target_blend) and template_blend and os.path.exists(template_blend):
                     try:
                         shutil.copy2(template_blend, target_blend)
@@ -1261,7 +1763,7 @@ class PackagingStudioSuite:
 
         msg = []
         if success_count > 0:
-            msg.append(f"✅ 成功归档并创建 {success_count} 个标准项目！")
+            msg.append(f"✅ 成功按【{rule.get('name')}】创建并归档 {success_count} 个标准项目！")
             if excel_appended_count > 0:
                 msg.append(f"📊 自动同步将 {excel_appended_count} 个新项目录入《产品列表.xlsx》！")
         if duplicate_count > 0:
@@ -1549,7 +2051,10 @@ class PackagingStudioSuite:
         if not proj_path or not os.path.exists(proj_path):
             messagebox.showwarning("提示", f"未找到该项目的本地文件夹:\n{proj_path}")
             return
-        blend_dir = os.path.join(proj_path, "03_3D_三维工程")
+        rule = self.get_current_folder_rule()
+        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
+        
+        blend_dir = os.path.join(proj_path, blend_sub) if blend_sub else proj_path
         target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
         blends = glob.glob(os.path.join(target_dir, "*.blend"))
         if blends:
@@ -1566,12 +2071,17 @@ class PackagingStudioSuite:
         menu = tk.Menu(self.root, tearoff=0, bg=self.colors["panel_bg"], fg=self.colors["fg"])
         p = proj.get("path", "")
         sku = proj.get("sku", "")
+        rule = self.get_current_folder_rule()
+        d_sub = rule.get("design_sub", "01_Design_平面原稿")
+        r_sub = rule.get("render_sub", "04_Renders_通道输出")
         
         menu.add_command(label=f"📁 打开文件夹: {sku}", command=lambda: self.open_folder(p))
         menu.add_command(label="🚀 Blender 打开 3D 工程", command=lambda: self.launch_blend(p))
         if p and os.path.exists(p):
-            menu.add_command(label="🎨 查看 01_Design 平面原稿", command=lambda: self.open_folder(os.path.join(p, "01_Design_平面原稿")))
-            menu.add_command(label="🖼️ 查看 04_Renders 渲染大图", command=lambda: self.open_folder(os.path.join(p, "04_Renders_通道输出")))
+            if d_sub:
+                menu.add_command(label=f"🎨 查看 {d_sub}", command=lambda: self.open_folder(os.path.join(p, d_sub)))
+            if r_sub:
+                menu.add_command(label=f"🖼️ 查看 {r_sub}", command=lambda: self.open_folder(os.path.join(p, r_sub)))
             
         menu.add_separator()
         
