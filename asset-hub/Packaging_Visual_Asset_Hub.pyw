@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-包装视觉资产管理器 (Packaging Visual Asset Hub - v3.1 实时自动同步版)
-特性：
-1. 【Excel 实时热同步监听】：后台每 2 秒检测《产品列表.xlsx》修改时间，表格一保存，界面 0.1 秒自动静默热更新！
-2. 【双向图文提取】：自动提取内嵌高清渲染图、分类、产品名与本地超链接。
-3. 【形态与品牌多维筛选】：瓶装、袋装、盒装、套盒一键毫秒级筛选。
-4. 【一键直达交互】：单击打开文件夹，双击打开 Blender 3D 工程，右键全功能菜单。
-5. 【极速分页 & HTML 导出】：流畅 0 延迟，随时导出独立网页画廊。
+包装视觉资产管理器 (Packaging Visual Asset Hub - v3.2 硬盘扫描优先智能融合版)
+核心机制：
+1. 【扫描优先去重法则】：当 Excel 台账与本地硬盘扫描发生重复时，以【本地硬盘真实扫描结果为准】！
+   - 优先采用硬盘上最新渲染的 Beauty 高清成品图与实际修改时间。
+   - 继承 Excel 中的形态分类标签 (瓶装/袋装/盒装/套盒)。
+2. 【深度智能扫描】：全面穿透主工作盘下多层级目录 (支持 400+ 真实工业项目)，秒级提取渲染封面。
+3. 【实时热更新监听】：后台每 2 秒监听《产品列表.xlsx》，表格修改保存后 0.1 秒静默自动同步。
+4. 【多维极速筛选】：左侧形态分类 + 客户品牌 + 顶部即时搜索框。
+5. 【一键直达交互】：单击打开文件夹，双击打开 Blender 5.2 3D 工程，右键全能菜单。
 """
 
 import os
@@ -44,7 +46,8 @@ if not DEFAULT_WORKSPACES:
 SYSTEM_IGNORED_DIRS = {
     'system volume information', '$recycle.bin', 'recovery', '$windows.~bt',
     'msocache', 'config.msi', 'perflogs', 'program files', 'program files (x86)',
-    'windows', 'programdata', 'appdata', '.git', '.vscode', '.idea'
+    'windows', 'programdata', 'appdata', '.git', '.vscode', '.idea', 'temp',
+    'fonts', 'render  preset', 'renderraw', 'studio light hdri pack'
 }
 
 def load_config():
@@ -69,6 +72,46 @@ def save_config(cfg):
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def find_project_thumbnail(proj_path):
+    """查找项目中最合适的高清渲染图作为缩略图"""
+    render_dirs = [
+        os.path.join(proj_path, "04_Renders_通道输出"),
+        os.path.join(proj_path, "05_Delivery_最终交付"),
+        os.path.join(proj_path, "渲染"),
+        os.path.join(proj_path, "Renders"),
+        proj_path
+    ]
+    candidates = []
+    for rdir in render_dirs:
+        if os.path.exists(rdir):
+            try:
+                for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+                    candidates.extend(glob.glob(os.path.join(rdir, ext)))
+            except Exception:
+                pass
+    if candidates:
+        beauty_imgs = [c for c in candidates if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_"])]
+        if beauty_imgs:
+            try:
+                beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                return beauty_imgs[0]
+            except Exception:
+                return beauty_imgs[0]
+        filtered = [c for c in candidates if not any(k in os.path.basename(c).lower() for k in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness"])]
+        if filtered:
+            try:
+                filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                return filtered[0]
+            except Exception:
+                return filtered[0]
+        try:
+            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            return candidates[0]
+        except Exception:
+            return candidates[0]
+    return None
 
 
 def parse_and_cache_excel(excel_path):
@@ -131,8 +174,6 @@ def parse_and_cache_excel(excel_path):
 
             thumb = row_image_map.get(r, None)
             norm_path = path.replace("/", "\\") if path else ""
-            if not thumb and os.path.exists(norm_path):
-                thumb = find_project_thumbnail(norm_path)
 
             brand = "柏缇"
             if norm_path:
@@ -148,7 +189,7 @@ def parse_and_cache_excel(excel_path):
                 "path": norm_path,
                 "thumbnail": thumb,
                 "time": str(time_str),
-                "mtime": os.path.getmtime(norm_path) if os.path.exists(norm_path) else 0
+                "mtime": os.path.getmtime(norm_path) if (norm_path and os.path.exists(norm_path)) else 0
             })
 
     except Exception as e:
@@ -157,46 +198,8 @@ def parse_and_cache_excel(excel_path):
     return projects
 
 
-def find_project_thumbnail(proj_path):
-    render_dirs = [
-        os.path.join(proj_path, "04_Renders_通道输出"),
-        os.path.join(proj_path, "05_Delivery_最终交付"),
-        os.path.join(proj_path, "渲染"),
-        os.path.join(proj_path, "Renders"),
-        proj_path
-    ]
-    candidates = []
-    for rdir in render_dirs:
-        if os.path.exists(rdir):
-            try:
-                for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                    candidates.extend(glob.glob(os.path.join(rdir, ext)))
-            except Exception:
-                pass
-    if candidates:
-        beauty_imgs = [c for c in candidates if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面"])]
-        if beauty_imgs:
-            try:
-                beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                return beauty_imgs[0]
-            except Exception:
-                return beauty_imgs[0]
-        filtered = [c for c in candidates if not any(k in os.path.basename(c).lower() for k in ["mask", "alpha", "crypto", "选区", "蒙版"])]
-        if filtered:
-            try:
-                filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                return filtered[0]
-            except Exception:
-                return filtered[0]
-        try:
-            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return candidates[0]
-        except Exception:
-            return candidates[0]
-    return None
-
-
 def scan_workspace_projects(root_dir):
+    """深度穿透扫描工作盘下所有实际存在的项目文件夹"""
     projects = []
     if not os.path.exists(root_dir):
         return projects
@@ -208,68 +211,104 @@ def scan_workspace_projects(root_dir):
     for entry in entries:
         if entry.lower() in SYSTEM_IGNORED_DIRS or entry.startswith('.') or entry.startswith('$') or entry.startswith('_'):
             continue
-        full_p = os.path.join(root_dir, entry)
+        brand_p = os.path.join(root_dir, entry)
         try:
-            if not os.path.isdir(full_p):
+            if not os.path.isdir(brand_p):
                 continue
-            sub_entries = os.listdir(full_p)
+            sub_entries = os.listdir(brand_p)
         except (PermissionError, OSError):
             continue
             
-        sub_items = [d.lower() for d in sub_entries]
-        is_direct_proj = any("03_3d" in s or "01_design" in s or "04_renders" in s or "渲染" in s for s in sub_items)
+        for sku in sub_entries:
+            if sku.lower() in SYSTEM_IGNORED_DIRS or sku.startswith('.') or sku.startswith('$') or sku.startswith('_'):
+                continue
+            sku_p = os.path.join(brand_p, sku)
+            try:
+                if os.path.isdir(sku_p):
+                    thumb = find_project_thumbnail(sku_p)
+                    try:
+                        s_mtime = os.path.getmtime(sku_p)
+                    except Exception:
+                        s_mtime = 0
+                    projects.append({
+                        "source": "disk",
+                        "brand": entry,
+                        "sku": sku,
+                        "cat": "三维项目",
+                        "path": sku_p,
+                        "thumbnail": thumb,
+                        "time": "",
+                        "mtime": s_mtime
+                    })
+            except (PermissionError, OSError):
+                continue
+                
+    projects.sort(key=lambda x: x["mtime"], reverse=True)
+    return projects
+
+
+def merge_excel_and_disk_projects(excel_projects, disk_projects):
+    """
+    【扫描优先去重准则】：
+    如果 Excel 与 本地硬盘扫描 存在相同项目 (按路径或 SKU 匹配)：
+    - 100% 以【本地硬盘扫描结果为准】！(采用硬盘上最新渲染的 Beauty 图、最新修改时间与真实目录)
+    - 继承 Excel 的形态分类标签 (如 瓶装/袋装/盒装/套盒)
+    """
+    disk_map = {}
+    for dp in disk_projects:
+        norm_p = dp["path"].lower().replace("/", "\\").strip("\\")
+        disk_map[norm_p] = dp
+        # 建立备用 SKU 索引
+        sku_key = f"{dp['brand']}@@{dp['sku']}".lower()
+        disk_map[sku_key] = dp
+
+    merged = []
+    handled_disk_keys = set()
+
+    for ep in excel_projects:
+        norm_ep = ep["path"].lower().replace("/", "\\").strip("\\") if ep.get("path") else ""
+        sku_key = f"{ep.get('brand', '')}@@{ep.get('sku', '')}".lower()
         
-        try:
-            mtime = os.path.getmtime(full_p)
-        except Exception:
-            mtime = 0
-            
-        if is_direct_proj:
-            thumb = find_project_thumbnail(full_p)
-            projects.append({
-                "source": "disk",
-                "brand": "通用/未分类",
-                "sku": entry,
-                "cat": "三维项目",
-                "path": full_p,
+        matched_disk_proj = None
+        if norm_ep and norm_ep in disk_map:
+            matched_disk_proj = disk_map[norm_ep]
+        elif sku_key in disk_map:
+            matched_disk_proj = disk_map[sku_key]
+
+        if matched_disk_proj:
+            dp = matched_disk_proj
+            handled_disk_keys.add(dp["path"].lower().replace("/", "\\").strip("\\"))
+            # 扫描结果优先！
+            thumb = dp["thumbnail"] if dp["thumbnail"] else ep["thumbnail"]
+            mtime = dp["mtime"] if dp["mtime"] > 0 else ep["mtime"]
+            merged.append({
+                "source": "disk_prioritized",
+                "brand": dp["brand"],
+                "sku": dp["sku"],
+                "cat": ep.get("cat", "三维项目"),
+                "path": dp["path"],
                 "thumbnail": thumb,
-                "time": "",
+                "time": ep.get("time", ""),
                 "mtime": mtime
             })
         else:
-            brand_name = entry
-            for sku in sub_entries:
-                if sku.lower() in SYSTEM_IGNORED_DIRS or sku.startswith('.') or sku.startswith('_'):
-                    continue
-                sku_p = os.path.join(full_p, sku)
-                try:
-                    if os.path.isdir(sku_p):
-                        thumb = find_project_thumbnail(sku_p)
-                        try:
-                            s_mtime = os.path.getmtime(sku_p)
-                        except Exception:
-                            s_mtime = mtime
-                        projects.append({
-                            "source": "disk",
-                            "brand": brand_name,
-                            "sku": sku,
-                            "cat": "三维项目",
-                            "path": sku_p,
-                            "thumbnail": thumb,
-                            "time": "",
-                            "mtime": s_mtime
-                        })
-                except (PermissionError, OSError):
-                    continue
-                    
-    projects.sort(key=lambda x: x["mtime"], reverse=True)
-    return projects
+            merged.append(ep)
+
+    # 将其余仅在硬盘存在的项目全部加入
+    for dp in disk_projects:
+        norm_p = dp["path"].lower().replace("/", "\\").strip("\\")
+        if norm_p not in handled_disk_keys:
+            merged.append(dp)
+
+    # 按最新修改时间排序
+    merged.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+    return merged
 
 
 class AssetHubApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub v3.1)")
+        self.root.title("📦 包装视觉资产管理器 (Packaging Visual Asset Hub v3.2)")
         self.root.geometry("1180x780")
         self.root.minsize(960, 620)
         
@@ -282,7 +321,7 @@ class AssetHubApp:
         self.excel_path_var = tk.StringVar(value=self.cfg.get("excel_path", DEFAULT_EXCEL_PATH))
         
         self.last_excel_mtime = 0
-        self.view_mode_var = tk.StringVar(value="excel")
+        self.view_mode_var = tk.StringVar(value="merged") # "merged", "excel", "disk"
         self.search_var = tk.StringVar()
         self.selected_category_var = tk.StringVar(value="全部")
         
@@ -291,6 +330,7 @@ class AssetHubApp:
         
         self.excel_projects = []
         self.disk_projects = []
+        self.merged_projects = []
         self.current_display_list = []
         self.filtered_projects = []
         self.thumb_cache = {}
@@ -301,34 +341,36 @@ class AssetHubApp:
         self.start_excel_auto_sync_watcher()
 
     def build_ui(self):
+        # 1. 顶部控制栏
         top_bar = ttk.Frame(self.root, padding=(15, 10))
         top_bar.pack(fill=tk.X)
         
-        ttk.Label(top_bar, text="📊 数据源:").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(top_bar, text="📊 视图模式:").pack(side=tk.LEFT, padx=(0, 4))
         self.combo_source = ttk.Combobox(
             top_bar,
             textvariable=self.view_mode_var,
-            values=["excel", "disk"],
+            values=["merged", "excel", "disk"],
             state="readonly",
-            width=16,
+            width=22,
             font=("Microsoft YaHei", 9)
         )
         self.combo_source.pack(side=tk.LEFT, padx=(0, 15))
         self.combo_source.bind("<<ComboboxSelected>>", self.on_source_change)
         
         ttk.Label(top_bar, text="🔍 搜索产品:").pack(side=tk.LEFT, padx=(0, 4))
-        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=20)
-        search_entry.pack(side=tk.LEFT, padx=(0, 15))
+        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=18)
+        search_entry.pack(side=tk.LEFT, padx=(0, 12))
         self.search_var.trace_add("write", lambda *args: self.on_search_change())
         
         ttk.Button(top_bar, text="📊 重新指定 Excel...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(top_bar, text="🔄 立即刷新", command=self.load_all_data).pack(side=tk.LEFT, padx=(0, 6))
         
-        self.sync_status_lbl = tk.Label(top_bar, text="🟢 实时自动同步中", font=("Microsoft YaHei", 8), fg="#059669", bg="#ECFDF5", padx=6, pady=2)
+        self.sync_status_lbl = tk.Label(top_bar, text="🟢 扫描优先去重已就绪", font=("Microsoft YaHei", 8), fg="#059669", bg="#ECFDF5", padx=6, pady=2)
         self.sync_status_lbl.pack(side=tk.LEFT, padx=(6, 0))
         
         ttk.Button(top_bar, text="🌐 导出网页画廊 (HTML)...", command=self.export_html_gallery).pack(side=tk.RIGHT)
 
+        # 2. 底栏分页控制
         self.bottom_bar = ttk.Frame(self.root, padding=(15, 8))
         self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
@@ -341,6 +383,7 @@ class AssetHubApp:
         self.btn_prev = ttk.Button(self.bottom_bar, text="⬅️ 上一页", command=self.prev_page)
         self.btn_prev.pack(side=tk.RIGHT)
 
+        # 3. 主体区域 (左侧形态树 + 右侧卡片视口)
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
         
@@ -388,7 +431,7 @@ class AssetHubApp:
                     self.last_excel_mtime = current_mtime
                     self.thumb_cache.clear()
                     self.load_all_data()
-                    self.flash_sync_status("⚡ 检测到 Excel 表格已更新，已自动同步完成！")
+                    self.flash_sync_status("⚡ 检测到 Excel 已更新，已按扫描优先合并完成！")
                 elif self.last_excel_mtime == 0:
                     self.last_excel_mtime = current_mtime
             except Exception:
@@ -398,7 +441,7 @@ class AssetHubApp:
 
     def flash_sync_status(self, text):
         self.sync_status_lbl.config(text=text, bg="#FEF3C7", fg="#B45309")
-        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 实时自动同步中", bg="#ECFDF5", fg="#059669"))
+        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 扫描优先去重已就绪", bg="#ECFDF5", fg="#059669"))
 
     def on_canvas_configure(self, event):
         self.canvas.itemconfig(self.canvas_window, width=event.width)
@@ -421,12 +464,20 @@ class AssetHubApp:
         cur_ws = self.current_workspace_var.get().strip()
         self.disk_projects = scan_workspace_projects(cur_ws)
         
+        # 按照扫描优先规则深度融合
+        self.merged_projects = merge_excel_and_disk_projects(self.excel_projects, self.disk_projects)
+        
         self.combo_source["values"] = [
-            f"Excel 产品台账 ({len(self.excel_projects)})",
-            f"本地工作盘扫描 ({len(self.disk_projects)})"
+            f"⚡ 智能融合视图 ({len(self.merged_projects)})",
+            f"仅 Excel 产品台账 ({len(self.excel_projects)})",
+            f"仅本地工作盘扫描 ({len(self.disk_projects)})"
         ]
-        if self.view_mode_var.get() == "disk" or not self.excel_projects:
+        
+        mode = self.view_mode_var.get()
+        if mode == "excel":
             self.combo_source.current(1)
+        elif mode == "disk":
+            self.combo_source.current(2)
         else:
             self.combo_source.current(0)
             
@@ -434,12 +485,22 @@ class AssetHubApp:
 
     def on_source_change(self, event=None):
         sel_idx = self.combo_source.current()
-        self.view_mode_var.set("disk" if sel_idx == 1 else "excel")
+        if sel_idx == 1:
+            self.view_mode_var.set("excel")
+        elif sel_idx == 2:
+            self.view_mode_var.set("disk")
+        else:
+            self.view_mode_var.set("merged")
         self.update_active_dataset()
 
     def update_active_dataset(self):
-        is_disk = (self.view_mode_var.get() == "disk")
-        self.current_display_list = self.disk_projects if is_disk else self.excel_projects
+        mode = self.view_mode_var.get()
+        if mode == "excel":
+            self.current_display_list = self.excel_projects
+        elif mode == "disk":
+            self.current_display_list = self.disk_projects
+        else:
+            self.current_display_list = self.merged_projects
         
         cat_counts = {}
         for p in self.current_display_list:
@@ -467,7 +528,6 @@ class AssetHubApp:
             self.excel_path_var.set(f)
             self.cfg["excel_path"] = f
             save_config(self.cfg)
-            self.view_mode_var.set("excel")
             self.load_all_data()
             messagebox.showinfo("同步成功", f"已成功绑定并开启实时同步！共 {len(self.excel_projects)} 个产品。")
 
