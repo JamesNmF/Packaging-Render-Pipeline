@@ -1,10 +1,10 @@
 bl_info = {
     "name": "包装渲染与多通道自动输出助手 (Packaging Render Pipeline)",
     "author": "Antigravity Pipeline",
-    "version": (2, 0, 2),
+    "version": (2, 1, 0),
     "blender": (5, 2, 0),
     "location": "3D 视口 > 侧边栏 (N) > 包装渲染",
-    "description": "专为包装渲染定制：智能识别长中文产品目录命名、非阻塞多机位批量连拍、电商画幅/采样率快切、一键阴影捕捉、自动版本增量防覆盖与多通道输出",
+    "description": "专为包装渲染定制：内置标准项目脚手架创建、智能产品目录识别、非阻塞多机位批量连拍、电商画幅/采样率快切、一键阴影捕捉与多通道输出",
     "category": "Render",
 }
 
@@ -17,6 +17,25 @@ from bpy.types import Panel, Operator, PropertyGroup
 from bpy.app.handlers import persistent
 
 class PackagingPipelineProperties(PropertyGroup):
+    # 0. 标准项目脚手架创建
+    scaffold_root_dir: StringProperty(
+        name="工作根目录",
+        description="选择或输入存放所有项目的主工作盘/根目录 (如 E:\zjc 或 D:\Projects)",
+        subtype='DIR_PATH',
+        default="D:\\Projects\\"
+    )
+    scaffold_client_name: StringProperty(
+        name="品牌/客户名",
+        description="品牌或客户名称 (如：Brand_A 或 柏缇，可留空)",
+        default=""
+    )
+    scaffold_project_name: StringProperty(
+        name="产品/SKU名",
+        description="产品或SKU名称 (如：Peach_Soda 或 蜜桃气泡水)",
+        default=""
+    )
+    
+    # 1. 机位模式
     camera_mode: EnumProperty(
         name="机位模式",
         description="选择仅渲染当前视角或勾选批量连拍机位",
@@ -26,6 +45,8 @@ class PackagingPipelineProperties(PropertyGroup):
         ],
         default='ALL'
     )
+    
+    # 2. 输出配置
     output_directory: StringProperty(
         name="保存目录",
         description="渲染图与通道图保存目录 (// 代表当前工程同级目录)",
@@ -33,13 +54,13 @@ class PackagingPipelineProperties(PropertyGroup):
         default="//"
     )
     sku_name: StringProperty(
-        name="SKU/产品名 (选填)",
+        name="自定义前缀 (选填)",
         description="留空则自动从文件夹目录结构中提取产品名称 (如：Orange_Soda_Can)",
         default=""
     )
     auto_increment: BoolProperty(
         name="自动版本增量 (防覆盖 v01/v02)",
-        description="开启后每次渲染自动递增版本号 (如 Orange_Soda_Can_v01, Orange_Soda_Can_v02)，绝不覆盖旧图",
+        description="开启后每次渲染自动递增版本号 (如 Product_v01, Product_v02)，绝不覆盖旧图",
         default=True
     )
     export_beauty: BoolProperty(name="成品图 (Beauty RGBA PNG)", default=True)
@@ -49,7 +70,7 @@ class PackagingPipelineProperties(PropertyGroup):
 
 
 def get_resolved_output_directory(scene):
-    """安全解析保存目录，兼容未保存的工程与绝对路径"""
+    """安全解析保存目录，兼容未保存的工程与相对路径"""
     raw_dir = scene.packaging_props.output_directory.strip()
     
     if bpy.data.filepath:
@@ -70,7 +91,7 @@ def get_resolved_output_directory(scene):
 def auto_detect_project_name(scene):
     """
     智能穿透并识别产品名称：
-    自动跳过 '渲染', 'Renders', 'Output', '3D' 等通用归档层，
+    自动跳过 '03_3D_三维工程', '04_Renders_通道输出', '渲染', 'Renders', 'Output', '3D' 等通用归档层，
     精确提取上级目录作为产品名
     """
     custom = scene.packaging_props.sku_name.strip()
@@ -87,10 +108,15 @@ def auto_detect_project_name(scene):
         return "Render_Product"
         
     parts = os.path.normpath(dir_path).split(os.sep)
-    generic_names = {'渲染', 'renders', 'render', 'output', '3d', '工程', 'blend', 'temp', 'textures', ''}
+    generic_names = {
+        '渲染', 'renders', 'render', 'output', '3d', '工程', 'blend', 'temp', 'textures', '',
+        '01_design_平面原稿', '02_textures_贴图资产', '03_3d_三维工程', '04_renders_通道输出', '05_delivery_最终交付',
+        '01_design', '02_textures', '03_3d', '04_renders', '05_delivery'
+    }
     
     for part in reversed(parts):
-        if part and part.lower() not in generic_names and not part.endswith(':'):
+        clean_part = part.strip().lower()
+        if clean_part and clean_part not in generic_names and not part.endswith(':'):
             return part
             
     return "Render_Product"
@@ -289,7 +315,7 @@ def setup_compositor_and_passes(context, props, effective_prefix):
 
 
 # ==============================================================================
-# 非阻塞多机位异步接力队列管理器 (解决卡死、实时显示渲染窗口与采样进度)
+# 非阻塞多机位异步接力队列管理器
 # ==============================================================================
 
 camera_render_queue = []
@@ -341,8 +367,67 @@ def on_render_complete_batch_dispatcher(scene):
 
 
 # ==============================================================================
-# 操作符集合：机位管理、画幅/采样率快选、阴影捕捉、批量连拍
+# 操作符集合：项目脚手架创建、机位管理、画幅/采样率快选、阴影捕捉、批量连拍
 # ==============================================================================
+
+class PROJECT_OT_create_scaffold(Operator):
+    """一键创建标准五级工业项目目录并自动另存工程"""
+    bl_idname = "project.create_scaffold"
+    bl_label = "一键创建标准项目目录并另存工程"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        props = context.scene.packaging_props
+        
+        proj_name = props.scaffold_project_name.strip()
+        if not proj_name:
+            self.report({'WARNING'}, "请输入【产品/SKU名称】！")
+            return {'CANCELLED'}
+            
+        root_dir = bpy.path.abspath(props.scaffold_root_dir.strip())
+        if not root_dir or root_dir == "//":
+            root_dir = os.path.join(os.path.expanduser("~"), "Desktop", "Projects")
+            
+        client_name = props.scaffold_client_name.strip()
+        if client_name:
+            project_base_dir = os.path.join(root_dir, client_name, proj_name)
+        else:
+            project_base_dir = os.path.join(root_dir, proj_name)
+            
+        # 1. 创建标准五级目录
+        subfolders = [
+            "01_Design_平面原稿",
+            "02_Textures_贴图资产",
+            "03_3D_三维工程",
+            "04_Renders_通道输出",
+            "05_Delivery_最终交付"
+        ]
+        
+        for sub in subfolders:
+            os.makedirs(os.path.join(project_base_dir, sub), exist_ok=True)
+            
+        # 2. 另存当前工程到 03_3D_三维工程
+        blend_save_path = os.path.join(project_base_dir, "03_3D_三维工程", f"{proj_name}.blend")
+        bpy.ops.wm.save_as_mainfile(filepath=blend_save_path)
+        
+        # 3. 锁定相对路径与渲染输出目录
+        try:
+            bpy.ops.file.make_paths_relative()
+        except Exception:
+            pass
+            
+        props.output_directory = "//../04_Renders_通道输出/"
+        props.sku_name = ""  # 留空以自动识别
+        
+        # 4. 弹出项目根目录
+        try:
+            os.startfile(project_base_dir)
+        except Exception:
+            pass
+            
+        self.report({'INFO'}, f"🎉 成功创建标准项目 [{proj_name}] 并另存工程！")
+        return {'FINISHED'}
+
 
 class RENDER_OT_select_all_cameras(Operator):
     """一键全选 / 全不选 / 反选场景中的摄像机"""
@@ -593,6 +678,18 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         scene = context.scene
         props = scene.packaging_props
         
+        # 模块 0：标准项目脚手架创建
+        box_scaffold = layout.box()
+        box_scaffold.label(text="📁 新建工业级标准项目 (脚手架)", icon='NEWFOLDER')
+        box_scaffold.prop(props, "scaffold_root_dir", text="工作盘/根目录")
+        row_names = box_scaffold.row(align=True)
+        row_names.prop(props, "scaffold_client_name", text="客户/品牌")
+        row_names.prop(props, "scaffold_project_name", text="产品/SKU")
+        
+        row_btn_sc = box_scaffold.row()
+        row_btn_sc.scale_y = 1.3
+        row_btn_sc.operator("project.create_scaffold", text="✨ 一键创建标准工程并自动另存", icon='FILE_TICK')
+        
         # 模块 1：画幅与渲染品质快选
         box_quick = layout.box()
         box_quick.label(text="📐 画幅比例与品质快切", icon='IMAGE_PLANE')
@@ -689,6 +786,7 @@ class VIEW3D_PT_packaging_pipeline(Panel):
 
 classes = (
     PackagingPipelineProperties,
+    PROJECT_OT_create_scaffold,
     RENDER_OT_select_all_cameras,
     RENDER_OT_set_active_camera,
     RENDER_OT_set_aspect_ratio,
