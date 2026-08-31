@@ -20,7 +20,7 @@ class PackagingPipelineProperties(PropertyGroup):
     # 0. 标准项目脚手架创建
     scaffold_root_dir: StringProperty(
         name="工作根目录",
-        description="选择或输入存放所有项目的主工作盘/根目录 (如 E:\zjc 或 D:\Projects)",
+        description="选择或输入存放所有项目的主工作盘/根目录 (如 E:/Projects 或 D:/Projects)",
         subtype='DIR_PATH',
         default="D:\\Projects\\"
     )
