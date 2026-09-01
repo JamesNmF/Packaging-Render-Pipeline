@@ -47,6 +47,15 @@ class PackagingPipelineProperties(PropertyGroup):
     )
     
     # 2. 输出配置
+    image_format: EnumProperty(
+        name="输出格式",
+        description="选择渲染图片输出格式",
+        items=[
+            ('PNG', "PNG (无损透明)", "保存为无损 RGBA PNG 格式"),
+            ('JPEG', "JPG (100% 极高清)", "保存为 100% 最高画质 JPG 格式 (Quality: 100)，体积缩减 85%"),
+        ],
+        default='PNG'
+    )
     output_directory: StringProperty(
         name="保存目录",
         description="渲染图与通道图保存目录 (// 代表当前工程同级目录)",
@@ -63,8 +72,8 @@ class PackagingPipelineProperties(PropertyGroup):
         description="开启后每次渲染自动递增版本号 (如 Product_v01, Product_v02)，绝不覆盖旧图",
         default=True
     )
-    export_beauty: BoolProperty(name="成品图 (Beauty RGBA PNG)", default=True)
-    export_alpha: BoolProperty(name="纯黑白剪切蒙版 (Alpha PNG)", default=True)
+    export_beauty: BoolProperty(name="成品图 (Beauty)", default=True)
+    export_alpha: BoolProperty(name="纯黑白剪切蒙版 (Alpha)", default=True)
     export_cryptomatte: BoolProperty(name="Cryptomatte 智能选区", default=True)
     auto_open_folder: BoolProperty(name="渲染完成后自动弹出文件夹", default=True)
 
@@ -242,9 +251,15 @@ def setup_compositor_and_passes(context, props, effective_prefix):
 
     if hasattr(fo_node.format, "media_type"):
         fo_node.format.media_type = 'IMAGE'
-    fo_node.format.file_format = 'PNG'
-    fo_node.format.color_mode = 'RGBA'
-    fo_node.format.color_depth = '8'
+        
+    if props.image_format == 'JPEG':
+        fo_node.format.file_format = 'JPEG'
+        fo_node.format.color_mode = 'RGB'
+        fo_node.format.quality = 100
+    else:
+        fo_node.format.file_format = 'PNG'
+        fo_node.format.color_mode = 'RGBA'
+        fo_node.format.color_depth = '8'
 
     final_beauty_socket = find_final_beauty_socket(tree, rl_node)
 
@@ -752,6 +767,10 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         # 模块 4：输出配置与通道
         box_out = layout.box()
         box_out.label(text="输出配置与通道", icon='OUTPUT')
+        
+        row_fmt = box_out.row()
+        row_fmt.prop(props, "image_format", expand=True)
+        
         box_out.prop(props, "output_directory", text="保存目录")
         
         detected_name = auto_detect_project_name(scene)
