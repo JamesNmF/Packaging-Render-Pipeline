@@ -27,10 +27,12 @@ function exportArtboardsToTextures() {
     var currentFolder = aiFile.parent; // 如 E:\zjc\柏缇\水乳\01_Design_平面原稿
     var projectFolder = currentFolder.parent; // 如 E:\zjc\柏缇\水乳
     
-    // 寻找贴图目录（优先 02_Textures_贴图资产，其次 02_Textures，再其次 Textures）
+    // 寻找贴图目录（优先 02_Textures_贴图资产，其次 02_Textures，再其次老工程 png，再其次 Textures）
     var textureCandidates = [
         "02_Textures_贴图资产",
         "02_Textures",
+        "png",
+        "PNG",
         "02_贴图资产",
         "Textures",
         "贴图"

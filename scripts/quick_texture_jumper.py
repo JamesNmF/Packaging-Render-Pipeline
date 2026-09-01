@@ -28,6 +28,8 @@ from bpy_extras.io_utils import ImportHelper
 TEXTURE_CANDIDATES = [
     "02_Textures_贴图资产",
     "02_Textures",
+    "png",
+    "PNG",
     "02_贴图资产",
     "Textures",
     "贴图",
