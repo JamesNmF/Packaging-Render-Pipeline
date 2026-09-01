@@ -40,6 +40,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk, ImageDraw
 import openpyxl
+from openpyxl.drawing.image import Image as OpenpyxlImage
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".packaging_asset_thumbnails")
@@ -398,6 +399,117 @@ def update_project_category_in_excel(excel_path, proj_path, sku, new_cat):
     except Exception as e:
         print(f"Error updating category in Excel: {e}")
         return False
+
+
+def update_thumbnail_to_excel(excel_path, proj_path, sku, thumb_path, cell_size=(60, 60)):
+    """将单个项目的渲染缩略图写入/更新至 Excel 对应行的 C 列 (图片列)"""
+    if not excel_path or not os.path.exists(excel_path) or not thumb_path or not os.path.exists(thumb_path):
+        return False, "参数无效或文件不存在"
+        
+    try:
+        temp_cell_thumb = os.path.join(THUMB_CACHE_DIR, f"excel_cell_{hashlib.md5(thumb_path.encode('utf-8')).hexdigest()[:12]}.jpg")
+        with Image.open(thumb_path) as im:
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            im.thumbnail(cell_size, Image.Resampling.BILINEAR)
+            im.save(temp_cell_thumb, format="JPEG", quality=85)
+            
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
+        
+        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/') if proj_path else ""
+        target_row = None
+        
+        for r in range(2, ws.max_row + 1):
+            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
+            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
+            if (norm_proj_p and ex_p == norm_proj_p) or (sku and ex_name == sku):
+                target_row = r
+                break
+                
+        if not target_row:
+            target_row = ws.max_row + 1
+            next_idx = ws.max_row
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            ws.cell(row=target_row, column=1, value=next_idx)
+            ws.cell(row=target_row, column=2, value=sku)
+            ws.cell(row=target_row, column=4, value="包装")
+            ws.cell(row=target_row, column=5, value=proj_path.replace('\\', '/') if proj_path else "")
+            ws.cell(row=target_row, column=6, value=now_str)
+
+        ws.row_dimensions[target_row].height = 48
+        ws.column_dimensions['C'].width = 11
+        
+        img = OpenpyxlImage(temp_cell_thumb)
+        img.width = 54
+        img.height = 54
+        ws.add_image(img, f"C{target_row}")
+        
+        wb.save(excel_path)
+        wb.close()
+        return True, f"✅ 成功将 [{sku}] 渲染缩略图写入表格第 {target_row} 行 (C{target_row})！"
+    except PermissionError:
+        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。"
+    except Exception as e:
+        return False, f"写入 Excel 失败: {e}"
+
+
+def batch_sync_all_thumbnails_to_excel(excel_path, projects):
+    """一键批量将所有有渲染图的项目的缩略图回填至 Excel 台账图片列"""
+    if not excel_path or not os.path.exists(excel_path):
+        return False, "Excel 文件不存在", 0
+        
+    try:
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
+        ws.column_dimensions['C'].width = 11
+        
+        row_map = {}
+        for r in range(2, ws.max_row + 1):
+            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
+            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
+            if ex_p:
+                row_map[ex_p] = r
+            if ex_name:
+                row_map[ex_name.lower()] = r
+                
+        updated_count = 0
+        for p in projects:
+            thumb = p.get("thumbnail")
+            if not thumb or not os.path.exists(thumb):
+                continue
+                
+            norm_p = p["path"].replace('\\', '/').lower().strip('/') if p.get("path") else ""
+            sku_lower = str(p.get("sku", "")).lower().strip()
+            
+            target_row = None
+            if norm_p in row_map:
+                target_row = row_map[norm_p]
+            elif sku_lower in row_map:
+                target_row = row_map[sku_lower]
+                
+            if target_row:
+                temp_cell_thumb = os.path.join(THUMB_CACHE_DIR, f"excel_cell_{hashlib.md5(thumb.encode('utf-8')).hexdigest()[:12]}.jpg")
+                with Image.open(thumb) as im:
+                    if im.mode != "RGB":
+                        im = im.convert("RGB")
+                    im.thumbnail((60, 60), Image.Resampling.BILINEAR)
+                    im.save(temp_cell_thumb, format="JPEG", quality=85)
+                    
+                ws.row_dimensions[target_row].height = 48
+                img = OpenpyxlImage(temp_cell_thumb)
+                img.width = 54
+                img.height = 54
+                ws.add_image(img, f"C{target_row}")
+                updated_count += 1
+                
+        wb.save(excel_path)
+        wb.close()
+        return True, f"🎉 成功将 {updated_count} 个项目的最新渲染缩略图同步嵌入到 Excel 台账！", updated_count
+    except PermissionError:
+        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。", 0
+    except Exception as e:
+        return False, f"批量写入 Excel 失败: {e}", 0
 
 
 def get_file_md5(filepath):
@@ -1320,6 +1432,7 @@ class PackagingStudioSuite:
         self.search_var.trace_add("write", lambda *args: self.on_search_change_debounced())
         
         ttk.Button(top_bar, text="📊 绑定 Excel...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_bar, text="📤 同步缩略图到 Excel", command=self.sync_all_thumbnails_to_excel).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(top_bar, text="🔄 刷新", command=self.load_all_asset_data).pack(side=tk.LEFT, padx=(0, 6))
         
         self.sync_status_lbl = tk.Label(
@@ -2282,8 +2395,51 @@ class PackagingStudioSuite:
         menu.add_cascade(label=f"🏷️ 修改业务形态 (当前: {proj.get('cat', '包装')})", menu=cat_submenu)
         
         menu.add_separator()
+        if proj.get("thumbnail") and os.path.exists(proj["thumbnail"]):
+            menu.add_command(label="📊 将此渲染缩略图写入 Excel 台账 (图片列)", command=lambda pr=proj: self.sync_single_thumbnail_to_excel(pr))
         menu.add_command(label="📋 复制完整物理路径", command=lambda: self.copy_path_to_clipboard(p))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def sync_single_thumbnail_to_excel(self, proj):
+        ex_path = self.excel_path_var.get().strip()
+        if not ex_path or not os.path.exists(ex_path):
+            messagebox.showwarning("提示", "请先绑定有效且存在的《产品列表.xlsx》！")
+            return
+            
+        thumb = proj.get("thumbnail")
+        if not thumb or not os.path.exists(thumb):
+            messagebox.showwarning("提示", f"[{proj.get('sku')}] 尚未找到渲染图！")
+            return
+            
+        ok, msg = update_thumbnail_to_excel(ex_path, proj.get("path"), proj.get("sku"), thumb)
+        if ok:
+            self.sync_status_lbl.config(text=f"✅ [{proj['sku']}] 缩略图已同步写入 Excel！", bg="#1D3328", fg="#6EE7B7")
+            self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+            messagebox.showinfo("同步成功", msg)
+        else:
+            messagebox.showerror("同步失败", msg)
+
+    def sync_all_thumbnails_to_excel(self):
+        ex_path = self.excel_path_var.get().strip()
+        if not ex_path or not os.path.exists(ex_path):
+            messagebox.showwarning("提示", "请先绑定有效且存在的《产品列表.xlsx》！")
+            return
+            
+        valid_projs = [p for p in self.merged_projects if p.get("thumbnail") and os.path.exists(p["thumbnail"])]
+        if not valid_projs:
+            messagebox.showinfo("提示", "当前没有检测到任何含有渲染图的项目。")
+            return
+            
+        if not messagebox.askyesno("确认批量同步", f"检测到 {len(valid_projs)} 个项目包含渲染缩略图。\n是否一键将所有最新渲染图批量嵌入到《产品列表.xlsx》的【图片】列？"):
+            return
+            
+        ok, msg, count = batch_sync_all_thumbnails_to_excel(ex_path, self.merged_projects)
+        if ok:
+            self.sync_status_lbl.config(text=f"🎉 已将 {count} 张缩略图批量同步写入 Excel！", bg="#1D3328", fg="#6EE7B7")
+            self.root.after(4000, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+            messagebox.showinfo("批量同步完成", msg)
+        else:
+            messagebox.showerror("同步失败", msg)
 
     def change_project_category(self, proj, new_cat):
         new_cat = normalize_category(new_cat)
