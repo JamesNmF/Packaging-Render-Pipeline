@@ -658,7 +658,15 @@ def scan_workspace_projects_fast(root_dir, meta_cache):
                     s_mtime = get_project_max_mtime(sku_p)
                     cache_key = sku_p.lower().replace("/", "\\")
                     
-                    if cache_key in meta_cache and meta_cache[cache_key].get("mtime") == s_mtime:
+                    cached_thumb = meta_cache.get(cache_key, {}).get("thumbnail")
+                    has_valid_cached_thumb = (
+                        cache_key in meta_cache 
+                        and meta_cache[cache_key].get("mtime") == s_mtime
+                        and cached_thumb
+                        and os.path.exists(cached_thumb)
+                    )
+                    
+                    if has_valid_cached_thumb:
                         cached_item = meta_cache[cache_key]
                         projects.append({
                             "source": "disk",
@@ -1944,19 +1952,43 @@ class PackagingStudioSuite:
     # ---------------- 资产看板数据与极速同步 ----------------
     def start_excel_auto_sync_watcher(self):
         ex_path = self.excel_path_var.get().strip()
+        cur_ws = self.current_workspace_var.get().strip()
+        needs_refresh = False
+        status_msg = ""
+        
+        # 1. 监测 Excel 台账变化
         if ex_path and os.path.exists(ex_path):
             try:
                 current_mtime = os.path.getmtime(ex_path)
                 if self.last_excel_mtime > 0 and current_mtime > self.last_excel_mtime:
                     self.last_excel_mtime = current_mtime
-                    self.thumb_tk_cache.clear()
-                    self.load_all_asset_data()
-                    self.sync_status_lbl.config(text="⚡ Excel 已更新，已自动同步！", bg="#FEF3C7", fg="#B45309")
-                    self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+                    needs_refresh = True
+                    status_msg = "⚡ Excel 台账已更新，已自动同步！"
                 elif self.last_excel_mtime == 0:
                     self.last_excel_mtime = current_mtime
             except Exception:
                 pass
+                
+        # 2. 监测工作盘最新渲染文件变动 (秒级感知 Blender 新渲染出图)
+        if cur_ws and os.path.exists(cur_ws):
+            try:
+                cur_ws_mtime = os.path.getmtime(cur_ws)
+                if not hasattr(self, "last_ws_mtime") or self.last_ws_mtime == 0:
+                    self.last_ws_mtime = cur_ws_mtime
+                elif cur_ws_mtime > self.last_ws_mtime:
+                    self.last_ws_mtime = cur_ws_mtime
+                    needs_refresh = True
+                    if not status_msg:
+                        status_msg = "⚡ 检测到新渲染图生成，已实时更新封面！"
+            except Exception:
+                pass
+
+        if needs_refresh:
+            self.thumb_tk_cache.clear()
+            self.load_all_asset_data()
+            self.sync_status_lbl.config(text=status_msg if status_msg else "⚡ 资产库已实时刷新！", bg="#FEF3C7", fg="#B45309")
+            self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
+
         self.root.after(2000, self.start_excel_auto_sync_watcher)
 
     def load_all_asset_data(self):
