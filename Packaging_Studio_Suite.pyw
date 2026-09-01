@@ -451,6 +451,23 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
     return brand, sku, is_junk
 
 
+def get_project_max_mtime(sku_p):
+    try:
+        max_m = os.path.getmtime(sku_p)
+        for sub in ["04_Renders_通道输出", "04_Renders_高清分层输出", "03_输出", "05_Delivery_最终交付", "05_Final_精修定稿", "渲染", "Renders", "Output"]:
+            sub_p = os.path.join(sku_p, sub)
+            if os.path.exists(sub_p):
+                try:
+                    m = os.path.getmtime(sub_p)
+                    if m > max_m:
+                        max_m = m
+                except Exception:
+                    pass
+        return max_m
+    except Exception:
+        return 0
+
+
 def find_project_thumbnail(proj_path):
     if not proj_path or not os.path.exists(proj_path):
         return None
@@ -463,21 +480,26 @@ def find_project_thumbnail(proj_path):
         os.path.join(proj_path, "05_Final_精修定稿"),
         os.path.join(proj_path, "渲染"),
         os.path.join(proj_path, "Renders"),
+        os.path.join(proj_path, "Output"),
         proj_path
     ]
     candidates = []
+    supported_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    
     for rdir in render_dirs:
-        if os.path.exists(rdir):
+        if os.path.exists(rdir) and os.path.isdir(rdir):
             try:
-                for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                    candidates.extend(glob.glob(os.path.join(rdir, ext)))
+                for f in os.listdir(rdir):
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in supported_exts:
+                        candidates.append(os.path.join(rdir, f))
             except Exception:
                 pass
                 
     if candidates:
         beauty_imgs = [
             c for c in candidates 
-            if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_", "main", "render"])
+            if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_", "main", "render", "preview", "final"])
             and not any(bad in os.path.basename(c).lower() for bad in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness", "ao_"])
         ]
         if beauty_imgs:
@@ -618,7 +640,7 @@ def scan_workspace_projects_fast(root_dir, meta_cache):
             sku_p = os.path.join(brand_p, sku)
             try:
                 if os.path.isdir(sku_p):
-                    s_mtime = os.path.getmtime(sku_p)
+                    s_mtime = get_project_max_mtime(sku_p)
                     cache_key = sku_p.lower().replace("/", "\\")
                     
                     if cache_key in meta_cache and meta_cache[cache_key].get("mtime") == s_mtime:
