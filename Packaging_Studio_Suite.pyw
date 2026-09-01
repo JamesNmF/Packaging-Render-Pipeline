@@ -2826,10 +2826,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    
-    start_time = datetime.datetime.now()
-    MIN_SPLASH_DURATION_SEC = 2.0
-    
+
     splash = None
     splash_path = SPLASH_CAT_JPG
     if os.path.exists(splash_path):
@@ -2841,20 +2838,39 @@ def main():
 
     initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
     window = MainWindow(initial_files=initial_files)
-    
+
+    # 双锁门：最少 2000ms + 数据加载完成，二者均满足才显示主窗口
+    _timer_done = [False]
+    _data_done = [False]
+
     def do_show_main():
+        if not (_timer_done[0] and _data_done[0]):
+            return
         if splash:
             splash.close()
         window.show()
         set_dark_titlebar(int(window.winId()), window.current_theme == "dark")
 
-    def on_ready_show():
-        elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        remaining_ms = int(max(0, (MIN_SPLASH_DURATION_SEC - elapsed) * 1000))
-        QTimer.singleShot(remaining_ms, do_show_main)
+    def on_timer_done():
+        _timer_done[0] = True
+        do_show_main()
 
-    window.initial_load_done.connect(on_ready_show)
-    QTimer.singleShot(3500, do_show_main)
+    def on_data_ready():
+        _data_done[0] = True
+        do_show_main()
+
+    # 固定 2000ms 最少等待 (无论数据多快加载完毕)
+    QTimer.singleShot(2000, on_timer_done)
+
+    # 数据加载完毕信号
+    window.initial_load_done.connect(on_data_ready)
+
+    # 终极兜底：4 秒后强制显示（防止数据加载信号丢失）
+    QTimer.singleShot(4000, lambda: (
+        _timer_done.__setitem__(0, True) or
+        _data_done.__setitem__(0, True) or
+        do_show_main()
+    ))
     
     sys.exit(app.exec())
 
