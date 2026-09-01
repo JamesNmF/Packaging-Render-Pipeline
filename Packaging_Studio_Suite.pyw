@@ -25,9 +25,11 @@ import sys
 import re
 import json
 import glob
+import html
 import shutil
 import hashlib
 import zipfile
+import tempfile
 import datetime
 import threading
 import webbrowser
@@ -65,12 +67,10 @@ def get_valid_template_blend(cfg=None):
     if cfg and cfg.get("template_blend_path"):
         candidates.append(cfg.get("template_blend_path"))
     candidates.extend([
-        r"E:\zjc\默认文件.blend",
         r"C:\Users\qq424\Packaging_Tools\templates\Packaging_Master_Template.blend",
         os.path.join(os.path.dirname(__file__), "templates", "Packaging_Master_Template.blend"),
         os.path.join(os.path.dirname(__file__), "Packaging_Master_Template.blend"),
-        r"C:\Users\qq424\Desktop\Packaging-Render-Pipeline\templates\Packaging_Master_Template.blend",
-        r"E:\zjc\预设1.blend"
+        r"C:\Users\qq424\Desktop\Packaging-Render-Pipeline\templates\Packaging_Master_Template.blend"
     ])
     for c in candidates:
         if c and os.path.exists(c):
@@ -259,13 +259,25 @@ def load_config():
             pass
     return DEFAULT_CONFIG
 
-def save_config(cfg):
+def save_json_atomic(filepath, data, ensure_ascii=False, indent=2):
+    """原子化写入 JSON：先写入临时文件再原子替换，防止异常断电导致 0 字节损坏"""
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        dir_name = os.path.dirname(filepath)
+        os.makedirs(dir_name, exist_ok=True)
+        temp_fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix="tmp_save_", suffix=".json")
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
+        os.replace(temp_path, filepath)
+    except Exception as e:
+        print(f"Error atomic saving JSON: {e}")
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
+def save_config(cfg):
+    save_json_atomic(CONFIG_FILE, cfg, ensure_ascii=False, indent=4)
 
 def load_meta_cache():
     if os.path.exists(META_CACHE_FILE):
@@ -277,12 +289,7 @@ def load_meta_cache():
     return {}
 
 def save_meta_cache(cache):
-    try:
-        with open(META_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=1)
-    except Exception:
-        pass
-
+    save_json_atomic(META_CACHE_FILE, cache, ensure_ascii=False, indent=1)
 
 def get_fast_disk_thumbnail_path(orig_img_path, size=(190, 190)):
     if not orig_img_path or not os.path.exists(orig_img_path):
@@ -295,11 +302,11 @@ def get_fast_disk_thumbnail_path(orig_img_path, size=(190, 190)):
         if os.path.exists(cached_thumb_file):
             return cached_thumb_file
             
-        im = Image.open(orig_img_path)
-        if im.mode != "RGB":
-            im = im.convert("RGB")
-        im.thumbnail(size, Image.Resampling.BILINEAR)
-        im.save(cached_thumb_file, format="JPEG", quality=85)
+        with Image.open(orig_img_path) as im:
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            im.thumbnail(size, Image.Resampling.BILINEAR)
+            im.save(cached_thumb_file, format="JPEG", quality=85)
         return cached_thumb_file
     except Exception:
         return orig_img_path
@@ -333,7 +340,7 @@ def auto_detect_category_from_name(filename):
 
 def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
     if not excel_path or not os.path.exists(excel_path):
-        return False
+        return False, "Excel 文件不存在"
     try:
         wb = openpyxl.load_workbook(excel_path)
         ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
@@ -346,7 +353,8 @@ def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
             if ex_name == sku or (norm_proj_p and ex_p == norm_proj_p):
                 ws.cell(row=r, column=4, value=norm_cat)
                 wb.save(excel_path)
-                return False
+                wb.close()
+                return True, "更新现有记录"
                 
         next_idx = ws.max_row
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -357,10 +365,13 @@ def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
         except Exception:
             pass
         wb.save(excel_path)
-        return True
+        wb.close()
+        return True, "新增记录成功"
+    except PermissionError:
+        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。"
     except Exception as e:
         print(f"Error appending project to Excel: {e}")
-        return False
+        return False, str(e)
 
 
 def update_project_category_in_excel(excel_path, proj_path, sku, new_cat):
@@ -382,6 +393,7 @@ def update_project_category_in_excel(excel_path, proj_path, sku, new_cat):
                 break
         if updated:
             wb.save(excel_path)
+            wb.close()
         return updated
     except Exception as e:
         print(f"Error updating category in Excel: {e}")
@@ -448,6 +460,9 @@ def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
             brand = fallback_brand
             sku = f"未命名_{raw_name}"
             
+    # Windows 保留非法字符清洗
+    sku = re.sub(r'[:\\/*?\"<>|]', '_', sku).strip(" -_")
+    brand = re.sub(r'[:\\/*?\"<>|]', '_', brand).strip(" -_")
     return brand, sku, is_junk
 
 
@@ -1067,6 +1082,24 @@ class FolderRuleManagerDialog(tk.Toplevel):
         self.active_rule_id = cur.get("id")
         self.on_save_callback(self.rules, self.active_rule_id)
         self.destroy()
+
+
+def safe_create_blend_from_blender(blender_exe, target_blend_path):
+    if not os.path.exists(blender_exe):
+        return False
+    safe_path_repr = json.dumps(os.path.abspath(target_blend_path))
+    py_expr = f"import bpy; bpy.ops.wm.save_as_mainfile(filepath={safe_path_repr})"
+    try:
+        res = subprocess.run(
+            [blender_exe, "--background", "--factory-startup", "--python-expr", py_expr],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        return res.returncode == 0 and os.path.exists(target_blend_path)
+    except Exception as e:
+        print(f"Error creating blend via Blender: {e}")
+        return False
 
 
 # ==============================================================================
@@ -1788,18 +1821,12 @@ class PackagingStudioSuite:
         blend_sub = rule.get("blend_sub", subfolders[2] if len(subfolders) > 2 else (subfolders[0] if subfolders else ""))
         
         template_blend = get_valid_template_blend(self.cfg)
-        
-        # 如果依然没有找到现成的模板文件，但安装了 Blender，就用 Blender 自动生成一个
         if not template_blend and os.path.exists(BLENDER_EXE):
             tpl_dir = r"C:\Users\qq424\Packaging_Tools\templates"
             os.makedirs(tpl_dir, exist_ok=True)
             auto_tpl = os.path.join(tpl_dir, "Packaging_Master_Template.blend")
-            try:
-                subprocess.run([BLENDER_EXE, "--background", "--python-expr", f"import bpy; bpy.ops.wm.save_as_mainfile(filepath=r'{auto_tpl}')"], capture_output=True, timeout=10)
-                if os.path.exists(auto_tpl):
-                    template_blend = auto_tpl
-            except Exception:
-                pass
+            if safe_create_blend_from_blender(BLENDER_EXE, auto_tpl):
+                template_blend = auto_tpl
             
         auto_create_blend = self.auto_create_blend_var.get()
         auto_open_blender = self.auto_open_blender_var.get()
@@ -1810,6 +1837,7 @@ class PackagingStudioSuite:
         success_count = 0
         duplicate_count = 0
         excel_appended_count = 0
+        excel_lock_warnings = []
         last_blend = ""
         last_ai = ""
         last_proj = ""
@@ -1840,7 +1868,6 @@ class PackagingStudioSuite:
             if is_dup:
                 duplicate_count += 1
                 last_proj = proj_dir
-                # 如果是重复文件，仍然尝试找到现有的 blend 文件以备打开
                 if blend_sub:
                     test_b = os.path.join(proj_dir, blend_sub, f"{sku}.blend")
                     if os.path.exists(test_b):
@@ -1871,18 +1898,18 @@ class PackagingStudioSuite:
                         except Exception as e:
                             print(f"Error copying template blend: {e}")
                     elif os.path.exists(BLENDER_EXE):
-                        try:
-                            subprocess.run([BLENDER_EXE, "--background", "--python-expr", f"import bpy; bpy.ops.wm.save_as_mainfile(filepath=r'{target_blend}')"], capture_output=True, timeout=10)
-                            if os.path.exists(target_blend):
-                                last_blend = target_blend
-                        except Exception:
-                            pass
+                        if safe_create_blend_from_blender(BLENDER_EXE, target_blend):
+                            last_blend = target_blend
                 else:
                     last_blend = target_blend
 
             if auto_append_excel and excel_path and os.path.exists(excel_path):
-                if append_project_to_excel(excel_path, brand, sku, cat, proj_dir):
+                ok, emsg = append_project_to_excel(excel_path, brand, sku, cat, proj_dir)
+                if ok:
                     excel_appended_count += 1
+                elif "WPS" in emsg or "占用" in emsg:
+                    if emsg not in excel_lock_warnings:
+                        excel_lock_warnings.append(emsg)
 
         msg = []
         if success_count > 0:
@@ -1891,6 +1918,8 @@ class PackagingStudioSuite:
                 msg.append(f"📊 自动同步将 {excel_appended_count} 个新项目录入《产品列表.xlsx》！")
         if duplicate_count > 0:
             msg.append(f"ℹ️ 自动跳过 {duplicate_count} 个重复接收文件。")
+        if excel_lock_warnings:
+            msg.append("\n" + "\n".join(excel_lock_warnings))
             
         # 顺势拉起 AI 源文件
         if auto_open_ai and last_ai and os.path.exists(last_ai):
@@ -2257,20 +2286,23 @@ class PackagingStudioSuite:
         cards_html = []
         for p in self.current_display_list:
             thumb_rel = p.get("thumbnail") or ""
-            thumb_src = "file:///" + thumb_rel.replace("\\", "/") if (thumb_rel and os.path.exists(thumb_rel)) else "https://via.placeholder.com/300x300?text=No+Render"
-            folder_uri = "file:///" + p["path"].replace("\\", "/") if p.get("path") else "#"
-            cat_name = normalize_category(p.get("cat", "包装"))
+            thumb_src = html.escape("file:///" + thumb_rel.replace("\\", "/")) if (thumb_rel and os.path.exists(thumb_rel)) else "https://via.placeholder.com/300x300?text=No+Render"
+            folder_uri = html.escape("file:///" + p["path"].replace("\\", "/")) if p.get("path") else "#"
+            cat_name = html.escape(normalize_category(p.get("cat", "包装")))
+            brand_name = html.escape(str(p.get('brand', '')))
+            sku_name = html.escape(str(p.get('sku', '')))
+            path_name = html.escape(str(p.get('path', '')))
             
             cards_html.append(f"""
             <div class="card" onclick="window.open('{folder_uri}')">
-                <div class="thumb-container"><img src="{thumb_src}" alt="{p['sku']}" loading="lazy"></div>
+                <div class="thumb-container"><img src="{thumb_src}" alt="{sku_name}" loading="lazy"></div>
                 <div class="meta">
                     <div style="display:flex; gap:6px; margin-bottom:6px;">
                         <span class="badge" style="background:#26384C; color:#96C2EC;">{cat_name}</span>
-                        <span class="badge" style="background:#3A3D46; color:#B2B6BE;">{p.get('brand', '')}</span>
+                        <span class="badge" style="background:#3A3D46; color:#B2B6BE;">{brand_name}</span>
                     </div>
-                    <h3 class="title">{p['sku']}</h3>
-                    <p class="path">{p.get('path', '')}</p>
+                    <h3 class="title">{sku_name}</h3>
+                    <p class="path">{path_name}</p>
                 </div>
             </div>
             """)
