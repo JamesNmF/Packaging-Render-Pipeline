@@ -9,13 +9,17 @@
    - 4-Worker QThreadPool 异步图像流式解码与信号槽 (Signal/Slot) 回填；
    - 彻底绝缘假死与“未响应”，冷启动 0.05 秒瞬开。
 
-2. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
+2. 🐱 萌猫开屏等待页 (Cat Splash Loader Screen)：
+   - 启动时展示萌猫开工界面，后台全量资产就绪后无缝淡入主界面；
+   - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
+
+3. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
    - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
    - 自动生成对应 Blender 母版工程并拉起 Blender 5.2 LTS 开工；
    - 自动将新项目录入《产品列表.xlsx》；
    - 📊 渲染图一键双向内嵌写入 Excel 台账单元格。
 
-3. 🌿 温润工业石墨灰护眼设计 (Studio Graphite Eye-Care Dark Mode)：
+4. 🌿 温润工业石墨灰护眼设计 (Studio Graphite Eye-Care Dark Mode)：
    - 对标 Blender / Lightroom / Eagle 工业级高颜值调色，支持暗灰/浅色一键切换。
 ===================================================================
 """
@@ -36,6 +40,9 @@ import webbrowser
 import subprocess
 import xml.etree.ElementTree as ET
 
+import ctypes
+from ctypes import wintypes
+
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 import openpyxl
@@ -54,7 +61,8 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
-    QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame
+    QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
+    QProgressBar, QSplashScreen
 )
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
@@ -65,18 +73,50 @@ META_CACHE_FILE = os.path.join(CACHE_DIR, "disk_meta_cache.json")
 os.makedirs(EXCEL_CACHE_DIR, exist_ok=True)
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 
-APP_ICON_ICO = os.path.join(os.path.dirname(__file__), "app_icon.ico")
-if not os.path.exists(APP_ICON_ICO):
-    APP_ICON_ICO = r"C:\Users\qq424\Packaging_Tools\app_icon.ico"
-APP_ICON_PNG = os.path.join(os.path.dirname(__file__), "app_icon.png")
-if not os.path.exists(APP_ICON_PNG):
-    APP_ICON_PNG = r"C:\Users\qq424\Packaging_Tools\app_icon.png"
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        p = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(p):
+            return p
+    local_p = os.path.join(os.path.dirname(__file__), relative_path)
+    if os.path.exists(local_p):
+        return local_p
+    fixed_p = os.path.join(r"C:\Users\qq424\Packaging_Tools", relative_path)
+    if os.path.exists(fixed_p):
+        return fixed_p
+    return relative_path
+
+APP_ICON_ICO = get_resource_path("app_icon.ico")
+APP_ICON_PNG = get_resource_path("app_icon.png")
+SPLASH_CAT_JPG = get_resource_path("splash_cat.jpg")
 
 DEFAULT_EXCEL_PATH = r"C:\Users\qq424\WorkBuddy\2026-08-26-15-33-05\产品列表.xlsx"
 
 BLENDER_EXE = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 if not os.path.exists(BLENDER_EXE):
     BLENDER_EXE = "blender"
+
+def set_dark_titlebar(hwnd, dark=True):
+    if sys.platform == "win32":
+        try:
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            val = ctypes.c_int(1 if dark else 0)
+            res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(hwnd),
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(val),
+                ctypes.sizeof(val)
+            )
+            if res != 0:
+                DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(hwnd),
+                    DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+                    ctypes.byref(val),
+                    ctypes.sizeof(val)
+                )
+        except Exception:
+            pass
 
 def get_valid_template_blend(cfg=None):
     candidates = []
@@ -403,6 +443,7 @@ QListView#GalleryView {
     border: none;
 }
 """
+
 
 DEFAULT_CONFIG = {
     "workspaces": DEFAULT_WORKSPACES,
@@ -973,6 +1014,54 @@ class DataLoaderWorker(QRunnable):
         except Exception:
             self.signals.finished.emit([], [], [])
 
+# ----------------- 萌猫开屏等待窗口 (Cat Splash Screen) -----------------
+class CatSplashScreen(QWidget):
+    def __init__(self, splash_img_path):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SplashScreen)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(520, 440)
+        
+        self.pixmap = None
+        if os.path.exists(splash_img_path):
+            self.pixmap = QPixmap(splash_img_path).scaled(520, 400, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # 居中图片区域
+        self.img_lbl = QLabel()
+        self.img_lbl.setAlignment(Qt.AlignCenter)
+        if self.pixmap:
+            self.img_lbl.setPixmap(self.pixmap)
+        layout.addWidget(self.img_lbl, stretch=1)
+        
+        # 底栏进度区域
+        bottom_bar = QWidget()
+        bottom_bar.setFixedHeight(46)
+        bottom_bar.setStyleSheet("background: #18191C; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;")
+        b_layout = QVBoxLayout(bottom_bar)
+        b_layout.setContentsMargins(16, 6, 16, 6)
+        
+        self.status_lbl = QLabel("🚀 正在极速载入美术资产中枢...")
+        self.status_lbl.setStyleSheet("color: #93C5FD; font-weight: bold; font-size: 12px;")
+        b_layout.addWidget(self.status_lbl)
+        
+        self.prog_bar = QProgressBar()
+        self.prog_bar.setRange(0, 0)
+        self.prog_bar.setFixedHeight(4)
+        self.prog_bar.setTextVisible(False)
+        self.prog_bar.setStyleSheet("""
+            QProgressBar { border: none; background: #282A31; border-radius: 2px; }
+            QProgressBar::chunk { background: #3B82F6; border-radius: 2px; }
+        """)
+        b_layout.addWidget(self.prog_bar)
+        layout.addWidget(bottom_bar)
+
+    def set_status_text(self, text):
+        self.status_lbl.setText(text)
+
 # ----------------- Qt 虚拟化画廊数据模型 -----------------
 class GalleryModel(QAbstractListModel):
     def __init__(self, parent=None):
@@ -1186,6 +1275,10 @@ class FolderRuleManagerDialog(QDialog):
         self.build_ui()
         self.load_rule_into_form(self.current_idx)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
     def build_ui(self):
         main_layout = QVBoxLayout(self)
         splitter = QSplitter(Qt.HORIZONTAL)
@@ -1342,6 +1435,8 @@ class FolderRuleManagerDialog(QDialog):
 
 # ----------------- Qt6 工业级主窗口 -----------------
 class MainWindow(QMainWindow):
+    initial_load_done = Signal()
+
     def __init__(self, initial_files=None):
         super().__init__()
         self.setWindowTitle("美术资产中枢 - Art Asset Hub (v1.0 正式版 Qt6 GPU 加速)")
@@ -1362,6 +1457,7 @@ class MainWindow(QMainWindow):
         self.current_display_list = []
         self.selected_category = "全部"
         self.files_to_organize = []
+        self.has_fired_initial_done = False
         
         self.setup_ui()
         self.apply_theme()
@@ -1382,13 +1478,19 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(1)
             self.add_files_to_organizer(initial_files)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), self.current_theme == "dark")
+
     def apply_theme(self):
-        if self.current_theme == "dark":
+        is_dark = (self.current_theme == "dark")
+        if is_dark:
             self.setStyleSheet(DARK_QSS)
             self.btn_theme.setText("🌙 护眼暗灰")
         else:
             self.setStyleSheet(LIGHT_QSS)
             self.btn_theme.setText("☀️ 浅色模式")
+        set_dark_titlebar(int(self.winId()), is_dark)
 
     def toggle_theme(self):
         self.current_theme = "light" if self.current_theme == "dark" else "dark"
@@ -1639,6 +1741,9 @@ class MainWindow(QMainWindow):
         self.disk_projects = disk_p
         self.merged_projects = merged
         self.update_after_data_loaded()
+        if not self.has_fired_initial_done:
+            self.has_fired_initial_done = True
+            self.initial_load_done.emit()
 
     def update_after_data_loaded(self):
         self.sync_status_lbl.setText(f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)")
@@ -2192,9 +2297,31 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     
+    splash = None
+    splash_path = SPLASH_CAT_JPG
+    if os.path.exists(splash_path):
+        splash = CatSplashScreen(splash_path)
+        # 居中显示开屏
+        screen_geo = app.primaryScreen().geometry()
+        splash.move((screen_geo.width() - splash.width()) // 2, (screen_geo.height() - splash.height()) // 2)
+        splash.show()
+        app.processEvents()
+
     initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
     window = MainWindow(initial_files=initial_files)
-    window.show()
+    
+    def on_ready_show():
+        if splash:
+            splash.close()
+        window.show()
+        set_dark_titlebar(int(window.winId()), window.current_theme == "dark")
+
+    # 当全量数据就绪时，关闭开屏并展示主界面
+    window.initial_load_done.connect(on_ready_show)
+    
+    # 兜底超时 2 秒强制展示 (避免异常阻断)
+    QTimer.singleShot(2500, on_ready_show)
+    
     sys.exit(app.exec())
 
 if __name__ == "__main__":
