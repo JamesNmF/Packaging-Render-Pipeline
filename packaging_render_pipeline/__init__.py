@@ -263,18 +263,44 @@ def setup_compositor_and_passes(context, props, effective_prefix):
 
     final_beauty_socket = find_final_beauty_socket(tree, rl_node)
 
+    # 智能查找或自动创建 Cryptomatte 节点并连线 (Render Layers [图像] -> Cryptomatte [图像], Cryptomatte [选取/Pick] -> File Output)
     crypto_socket = None
-    for n in tree.nodes:
-        if 'crypto' in n.type.lower() or 'crypto' in n.name.lower():
-            if 'Pick' in n.outputs:
-                crypto_socket = n.outputs['Pick']
-            elif 'Matte' in n.outputs:
-                crypto_socket = n.outputs['Matte']
-            elif 'Image' in n.outputs:
-                crypto_socket = n.outputs['Image']
-            break
-    if not crypto_socket and 'CryptoObject00' in rl_node.outputs:
-        crypto_socket = rl_node.outputs['CryptoObject00']
+    if props.export_cryptomatte:
+        crypto_node = None
+        for n in tree.nodes:
+            if n.type in ('CRYPTOMATTE', 'CRYPTOMATTE_V2') or ('crypto' in n.name.lower() and n.type != 'OUTPUT_FILE' and 'packaging' not in n.name.lower()):
+                crypto_node = n
+                break
+                
+        if not crypto_node:
+            try:
+                crypto_node = tree.nodes.new(type='CompositorNodeCryptomatteV2')
+            except Exception:
+                try:
+                    crypto_node = tree.nodes.new(type='CompositorNodeCryptomatte')
+                except Exception:
+                    crypto_node = None
+                    
+        if crypto_node:
+            crypto_node.location = (rl_node.location.x + 350, rl_node.location.y - 250)
+            if hasattr(crypto_node, "source"):
+                crypto_node.source = 'RENDER'
+            if hasattr(crypto_node, "layer_name"):
+                crypto_node.layer_name = 'ViewLayer.CryptoObject'
+                
+            # 严格连接：Render Layers [图像/Image] -> Cryptomatte [图像/Image]
+            if 'Image' in rl_node.outputs and 'Image' in crypto_node.inputs:
+                tree.links.new(rl_node.outputs['Image'], crypto_node.inputs['Image'])
+                
+            # 取出 Cryptomatte 的【选取 / Pick】彩色彩图输出（供 PS 魔棒一键抠图选区）
+            if 'Pick' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Pick']
+            elif '选取' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['选取']
+            elif 'Matte' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Matte']
+            elif 'Image' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Image']
 
     # 兼容 Blender 5.2 file_output_items (使用物理索引进行安全连线)
     if hasattr(fo_node, "file_output_items"):
