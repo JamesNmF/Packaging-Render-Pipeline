@@ -2827,29 +2827,32 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # ① 第一步：立即显示 Splash，进入事件循环，让猫画面稳定渲染
     splash = None
     splash_path = SPLASH_CAT_JPG
     if os.path.exists(splash_path):
         splash = CatSplashScreen(splash_path)
         screen_geo = app.primaryScreen().geometry()
-        splash.move((screen_geo.width() - splash.width()) // 2, (screen_geo.height() - splash.height()) // 2)
+        splash.move((screen_geo.width() - splash.width()) // 2,
+                    (screen_geo.height() - splash.height()) // 2)
         splash.show()
         app.processEvents()
 
-    initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
-    window = MainWindow(initial_files=initial_files)
-
-    # 双锁门：最少 2000ms + 数据加载完成，二者均满足才显示主窗口
+    # 双锁门：最少 2000ms + 数据完全加载，二者同时满足才关闭 Splash
     _timer_done = [False]
-    _data_done = [False]
+    _data_done  = [False]
+    _window     = [None]
 
     def do_show_main():
+        """两把锁都开了才执行"""
         if not (_timer_done[0] and _data_done[0]):
             return
         if splash:
             splash.close()
-        window.show()
-        set_dark_titlebar(int(window.winId()), window.current_theme == "dark")
+        win = _window[0]
+        if win:
+            win.show()
+            set_dark_titlebar(int(win.winId()), win.current_theme == "dark")
 
     def on_timer_done():
         _timer_done[0] = True
@@ -2859,19 +2862,28 @@ def main():
         _data_done[0] = True
         do_show_main()
 
-    # 固定 2000ms 最少等待 (无论数据多快加载完毕)
+    # ② 第二步：Splash 已在事件循环中稳定显示后，延迟 50ms 再创建主窗口
+    #    这样 Splash 能真正渲染出来，而不是被 MainWindow() 同步阻塞
+    def create_main_window():
+        initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
+        win = MainWindow(initial_files=initial_files)
+        _window[0] = win
+        # 数据加载完毕信号 → 开锁 2
+        win.initial_load_done.connect(on_data_ready)
+
+    # ③ 固定 2000ms 最少等待 → 开锁 1（无论数据多快加载完毕都要等满 2 秒）
     QTimer.singleShot(2000, on_timer_done)
 
-    # 数据加载完毕信号
-    window.initial_load_done.connect(on_data_ready)
+    # ④ 50ms 后创建主窗口（此时 Splash 已完整渲染并在屏幕上稳定显示）
+    QTimer.singleShot(50, create_main_window)
 
-    # 终极兜底：4 秒后强制显示（防止数据加载信号丢失）
-    QTimer.singleShot(4000, lambda: (
-        _timer_done.__setitem__(0, True) or
-        _data_done.__setitem__(0, True) or
+    # ⑤ 终极兜底：5 秒后强制显示，防止信号丢失
+    def force_show():
+        _timer_done[0] = True
+        _data_done[0]  = True
         do_show_main()
-    ))
-    
+    QTimer.singleShot(5000, force_show)
+
     sys.exit(app.exec())
 
 if __name__ == "__main__":
