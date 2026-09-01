@@ -123,6 +123,7 @@ def get_valid_template_blend(cfg=None):
     if cfg and cfg.get("template_blend_path"):
         candidates.append(cfg.get("template_blend_path"))
     candidates.extend([
+        r"E:\zjc\包装默认文件.blend",
         r"C:\Users\qq424\Packaging_Tools\templates\Packaging_Master_Template.blend",
         os.path.join(os.path.dirname(__file__), "templates", "Packaging_Master_Template.blend"),
         os.path.join(os.path.dirname(__file__), "Packaging_Master_Template.blend"),
