@@ -1838,7 +1838,7 @@ class PackagingStudioSuite:
         duplicate_count = 0
         excel_appended_count = 0
         excel_lock_warnings = []
-        last_blend = ""
+        last_new_blend = "" # 仅记录全新首次创建的 Blender 工程
         last_ai = ""
         last_proj = ""
         
@@ -1868,10 +1868,6 @@ class PackagingStudioSuite:
             if is_dup:
                 duplicate_count += 1
                 last_proj = proj_dir
-                if blend_sub:
-                    test_b = os.path.join(proj_dir, blend_sub, f"{sku}.blend")
-                    if os.path.exists(test_b):
-                        last_blend = test_b
                 continue
                 
             dest_name = f"{sku}_v{len(existing_files)+1:02d}{ext}"
@@ -1890,18 +1886,17 @@ class PackagingStudioSuite:
                 os.makedirs(target_blend_dir, exist_ok=True)
                 target_blend = os.path.join(target_blend_dir, f"{sku}.blend")
                 
+                # 仅当工程文件原先不存在时，才创建并标记为【首次开工】
                 if not os.path.exists(target_blend):
                     if template_blend and os.path.exists(template_blend):
                         try:
                             shutil.copy2(template_blend, target_blend)
-                            last_blend = target_blend
+                            last_new_blend = target_blend
                         except Exception as e:
                             print(f"Error copying template blend: {e}")
                     elif os.path.exists(BLENDER_EXE):
                         if safe_create_blend_from_blender(BLENDER_EXE, target_blend):
-                            last_blend = target_blend
-                else:
-                    last_blend = target_blend
+                            last_new_blend = target_blend
 
             if auto_append_excel and excel_path and os.path.exists(excel_path):
                 ok, emsg = append_project_to_excel(excel_path, brand, sku, cat, proj_dir)
@@ -1929,13 +1924,13 @@ class PackagingStudioSuite:
             except Exception as e:
                 print(f"Error opening AI: {e}")
                 
-        # 顺势启动 Blender
-        if auto_open_blender and last_blend and os.path.exists(last_blend):
+        # 顺势启动 Blender (仅当是首次创建的新项目/新 Blend 工程时才打开；若归档现有工程的新版本，则不重复打开)
+        if auto_open_blender and last_new_blend and os.path.exists(last_new_blend):
             try:
-                subprocess.Popen([BLENDER_EXE, last_blend])
-                msg.append(f"🚀 已自动启动 Blender 打开工程: [{os.path.basename(last_blend)}]")
+                subprocess.Popen([BLENDER_EXE, last_new_blend])
+                msg.append(f"🚀 已自动启动 Blender 开工新工程: [{os.path.basename(last_new_blend)}]")
             except Exception:
-                os.startfile(last_blend)
+                os.startfile(last_new_blend)
         elif not auto_open_ai and last_proj and os.path.exists(last_proj):
             try:
                 os.startfile(last_proj)
