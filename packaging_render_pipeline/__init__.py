@@ -78,18 +78,61 @@ class PackagingPipelineProperties(PropertyGroup):
     auto_open_folder: BoolProperty(name="渲染完成后自动弹出文件夹", default=True)
 
 
+RENDER_SUBFOLDER_CANDIDATES = [
+    "04_Renders_通道输出",
+    "04_Renders_高清分层输出",
+    "04_Renders",
+    "03_输出",
+    "05_Delivery_最终交付",
+    "渲染",
+    "Renders",
+    "Output"
+]
+
 def get_resolved_output_directory(scene):
-    """安全解析保存目录，兼容未保存的工程与相对路径"""
+    """
+    智能解析保存目录：
+    1. 若用户在面板手动指定了绝对路径，优先使用；
+    2. 若为默认 // 或空，自动向上探测父级是否存在「04_Renders_通道输出」或「渲染」；
+    3. 若工程位于「03_3D_三维工程」等子目录，自动回退到父级并归入「04_Renders_通道输出」；
+    4. 绝不会错误保存在 03 建模工程目录中！
+    """
     raw_dir = scene.packaging_props.output_directory.strip()
     
     if bpy.data.filepath:
-        blend_dir = os.path.dirname(bpy.data.filepath)
-        if not raw_dir or raw_dir == "//":
-            return blend_dir
-        abs_dir = bpy.path.abspath(raw_dir)
-        return abs_dir if abs_dir else blend_dir
+        if raw_dir and raw_dir not in ("//", ".", ".\\", "./"):
+            abs_dir = bpy.path.abspath(raw_dir)
+            if abs_dir:
+                return abs_dir
+                
+        blend_dir = os.path.dirname(os.path.abspath(bpy.data.filepath))
+        parent_dir = os.path.dirname(blend_dir)
+        
+        # 1. 优先扫描父级目录是否已有标准渲染输出文件夹
+        for c in RENDER_SUBFOLDER_CANDIDATES:
+            cand_p = os.path.join(parent_dir, c)
+            if os.path.exists(cand_p) and os.path.isdir(cand_p):
+                return cand_p
+                
+        # 2. 扫描同级目录是否已有渲染输出文件夹
+        for c in RENDER_SUBFOLDER_CANDIDATES:
+            cand_p = os.path.join(blend_dir, c)
+            if os.path.exists(cand_p) and os.path.isdir(cand_p):
+                return cand_p
+
+        # 3. 检查当前目录是否是工程子目录 (如 03_3D_三维工程, 03_3D, 02_工程, 模型, 3D)
+        blend_dir_name = os.path.basename(blend_dir).lower()
+        if any(k in blend_dir_name for k in ["03_3d", "3d", "三维", "工程", "模型", "02_工程", "blend"]):
+            target_dir = os.path.join(parent_dir, "04_Renders_通道输出")
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+            except Exception:
+                pass
+            return target_dir
+            
+        return blend_dir
     else:
-        if raw_dir and raw_dir != "//":
+        if raw_dir and raw_dir not in ("//", ".", ".\\", "./"):
             abs_dir = bpy.path.abspath(raw_dir)
             if abs_dir:
                 return abs_dir
@@ -809,6 +852,9 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         row_fmt.prop(props, "image_format", expand=True)
         
         box_out.prop(props, "output_directory", text="保存目录")
+        resolved_out = get_resolved_output_directory(scene)
+        if resolved_out:
+            box_out.label(text=f"📂 目标目录: {os.path.basename(resolved_out)}", icon='FILE_FOLDER')
         
         detected_name = auto_detect_project_name(scene)
         box_out.prop(props, "sku_name", text="自定义前缀", placeholder=f"自动识别: {detected_name}")
