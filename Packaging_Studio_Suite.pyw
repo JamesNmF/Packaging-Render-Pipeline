@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-美术资产中枢 (Art Asset Hub - v1.0 正式版)
+美术资产中枢 (Art Asset Hub - v1.0 正式版 GPU 硬件加速版)
 ===================================================================
-【核心功能体系】：
-1. 🖼️ 视觉资产看板 (Visual Asset Hub)：
-   - 物理磁盘 15KB JPEG 缩略图缓存池 + 30 槽位复用池 (Widget Pooling)，极速瞬切 < 5ms；
-   - 自动融合 Excel 产品台账与本地硬盘工程；
+【核心架构体系】：
+1. 🚀 120 FPS 满帧 GPU 硬件加速画廊 (Edge WebView2 / Chromium Core)：
+   - 基于 Windows 原生 DirectX / Direct2D 硬件合成管线，零撕裂、零重影、如丝般顺滑；
+   - 智能融合 Excel 产品台账与本地硬盘工程；
    - 4 大业务形态精准分类：📦 包装 (默认) / 🎁 套盒 / 🖼️ 海报 / 📑 物料；
-   - 自动抓取最新 Beauty 渲染图为封面，支持导出全景 HTML 交互式画廊。
+   - 动态懒加载与磁盘快速缩略图缓存池。
 
-2. 📥 设计源文件分拣与开工 (Source Organizer & Pipeline Launcher)：
-   - 右键“发送到”一键唤起；
+2. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
    - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
    - 自动生成对应 Blender 母版工程并拉起 Blender 5.2 LTS 开工；
-   - 自动将新项目录入《产品列表.xlsx》。
+   - 自动将新项目录入《产品列表.xlsx》；
+   - 📊 渲染图一键双向内嵌写入 Excel 台账单元格。
 
 3. 🌿 温润工业石墨灰护眼设计 (Studio Graphite Eye-Care Dark Mode)：
-   - 告别高反差死黑，对标 Blender/Lightroom/Eagle 工业级调色，柔和防眩光。
+   - 对标 Blender / Lightroom / Eagle 工业级高颜值调色。
 ===================================================================
 """
 
@@ -36,9 +36,12 @@ import webbrowser
 import subprocess
 import concurrent.futures
 import xml.etree.ElementTree as ET
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
-from PIL import Image, ImageTk, ImageDraw
+import urllib.parse
+import http.server
+import socketserver
+import webview
+from PIL import Image, ImageDraw
+
 Image.MAX_IMAGE_PIXELS = None
 import openpyxl
 from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -97,7 +100,6 @@ SYSTEM_IGNORED_DIRS = {
 
 VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
 
-# 默认预设的文件夹规则库
 DEFAULT_FOLDER_RULES = [
     {
         "id": "standard_packaging_5stage",
@@ -163,71 +165,6 @@ DEFAULT_FOLDER_RULES = [
     }
 ]
 
-THEMES = {
-    "dark": {
-        "bg": "#222429",
-        "header_bg": "#2A2C32",
-        "sidebar_bg": "#2A2C32",
-        "panel_bg": "#2A2C32",
-        "card_bg": "#30333A",
-        "card_border": "#3D414A",
-        "card_hover": "#4C84C4",
-        "canvas_bg": "#222429",
-        "thumb_bg": "#27292F",
-        "input_bg": "#1A1B1F",
-        "input_fg": "#E2E4E8",
-        "fg": "#E2E4E8",
-        "fg_muted": "#9699A2",
-        "fg_dim": "#656872",
-        "primary": "#3B78B8",
-        "primary_hover": "#4989CE",
-        "primary_fg": "#FFFFFF",
-        "badge_brand_bg": "#3A3D46",
-        "badge_brand_fg": "#B2B6BE",
-        "cat_colors": {
-            "包装": ("#26384C", "#96C2EC"),
-            "套盒": ("#443522", "#E8C88A"),
-            "海报": ("#382845", "#D2A2E8"),
-            "物料": ("#223D32", "#8EE2BE")
-        },
-        "btn_secondary_bg": "#3A3D46",
-        "btn_secondary_fg": "#D2D5DA",
-        "status_bg": "#1D3328",
-        "status_fg": "#6EE7B7"
-    },
-    "light": {
-        "bg": "#F4F6F9",
-        "header_bg": "#FFFFFF",
-        "sidebar_bg": "#FFFFFF",
-        "panel_bg": "#FFFFFF",
-        "card_bg": "#FFFFFF",
-        "card_border": "#E2E6EC",
-        "card_hover": "#0284C7",
-        "canvas_bg": "#F4F6F9",
-        "thumb_bg": "#F8FAFC",
-        "input_bg": "#FFFFFF",
-        "input_fg": "#0F172A",
-        "fg": "#1E293B",
-        "fg_muted": "#64748B",
-        "fg_dim": "#94A3B8",
-        "primary": "#0078D7",
-        "primary_hover": "#005A9E",
-        "primary_fg": "#FFFFFF",
-        "badge_brand_bg": "#F1F5F9",
-        "badge_brand_fg": "#475569",
-        "cat_colors": {
-            "包装": ("#E1EFFF", "#005A9E"),
-            "套盒": ("#FEF3C7", "#B45309"),
-            "海报": ("#EDE9FE", "#6D28D9"),
-            "物料": ("#ECFDF5", "#047857")
-        },
-        "btn_secondary_bg": "#F1F5F9",
-        "btn_secondary_fg": "#1E293B",
-        "status_bg": "#ECFDF5",
-        "status_fg": "#059669"
-    }
-}
-
 DEFAULT_CONFIG = {
     "workspaces": DEFAULT_WORKSPACES,
     "current_workspace": DEFAULT_WORKSPACES[0],
@@ -253,7 +190,6 @@ def load_config():
                 for k, v in DEFAULT_CONFIG.items():
                     if k not in data:
                         data[k] = v
-                # 检查 rules 是否完整
                 if not data.get("folder_rules"):
                     data["folder_rules"] = DEFAULT_FOLDER_RULES
                 return data
@@ -262,7 +198,6 @@ def load_config():
     return DEFAULT_CONFIG
 
 def save_json_atomic(filepath, data, ensure_ascii=False, indent=2):
-    """原子化写入 JSON：先写入临时文件再原子替换，防止异常断电导致 0 字节损坏"""
     try:
         dir_name = os.path.dirname(filepath)
         os.makedirs(dir_name, exist_ok=True)
@@ -293,477 +228,245 @@ def load_meta_cache():
 def save_meta_cache(cache):
     save_json_atomic(META_CACHE_FILE, cache, ensure_ascii=False, indent=1)
 
-def get_fast_disk_thumbnail_path(orig_img_path, size=(190, 190)):
+def get_fast_disk_thumbnail_path(orig_img_path, size=(260, 260)):
     if not orig_img_path or not os.path.exists(orig_img_path):
         return None
     try:
         mtime = os.path.getmtime(orig_img_path)
-        h = hashlib.md5(f"{orig_img_path}_{mtime}_{size}".encode('utf-8')).hexdigest()
-        cached_thumb_file = os.path.join(THUMB_CACHE_DIR, f"{h}.jpg")
+        img_id = hashlib.md5(f"{orig_img_path}_{mtime}_{size[0]}x{size[1]}".encode("utf-8")).hexdigest()
+        thumb_path = os.path.join(THUMB_CACHE_DIR, f"{img_id}.jpg")
         
-        if os.path.exists(cached_thumb_file):
-            return cached_thumb_file
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+            return thumb_path
             
         with Image.open(orig_img_path) as im:
-            if im.mode != "RGB":
+            if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
-            im.thumbnail(size, Image.Resampling.BILINEAR)
-            im.save(cached_thumb_file, format="JPEG", quality=85)
-        return cached_thumb_file
-    except Exception:
+            im.thumbnail(size, Image.Resampling.LANCZOS)
+            im.save(thumb_path, "JPEG", quality=85, optimize=True)
+            return thumb_path
+    except Exception as e:
         return orig_img_path
 
-
-def normalize_category(raw_cat):
-    if not raw_cat:
-        return "包装"
-    raw = str(raw_cat).strip()
-    if any(k in raw for k in ["套盒", "礼盒", "套装", "组合装", "礼品装", "kit", "giftbox"]):
-        return "套盒"
-    elif any(k in raw.lower() for k in ["海报", "kv", "主视觉", "展板", "poster"]):
-        return "海报"
-    elif any(k in raw.lower() for k in ["物料", "易拉宝", "台卡", "展架", "堆头", "折页", "画册", "dm", "posm"]):
-        return "物料"
-    else:
-        return "包装"
-
-
-def auto_detect_category_from_name(filename):
-    fn = filename.lower()
-    if any(k in fn for k in ["套盒", "礼盒", "套装", "组合装", "礼品装", "kit", "giftbox"]):
-        return "套盒"
-    elif any(k in fn for k in ["海报", "kv", "主视觉", "展板", "poster"]):
-        return "海报"
-    elif any(k in fn for k in ["物料", "易拉宝", "台卡", "展架", "堆头", "折页", "画册", "dm", "posm"]):
-        return "物料"
-    else:
-        return "包装"
-
-
-def append_project_to_excel(excel_path, brand, sku, cat, proj_path):
+def extract_images_from_excel_zip(excel_path):
     if not excel_path or not os.path.exists(excel_path):
-        return False, "Excel 文件不存在"
+        return {}
+    cell_image_map = {}
     try:
-        wb = openpyxl.load_workbook(excel_path)
-        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
-        norm_cat = normalize_category(cat)
-        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/')
-        
-        for r in range(2, ws.max_row + 1):
-            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
-            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
-            if ex_name == sku or (norm_proj_p and ex_p == norm_proj_p):
-                ws.cell(row=r, column=4, value=norm_cat)
-                wb.save(excel_path)
-                wb.close()
-                return True, "更新现有记录"
-                
-        next_idx = ws.max_row
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        new_row = [next_idx, sku, None, norm_cat, proj_path.replace('\\', '/'), now_str]
-        ws.append(new_row)
-        try:
-            ws.row_dimensions[ws.max_row].height = 40
-        except Exception:
-            pass
-        wb.save(excel_path)
-        wb.close()
-        return True, "新增记录成功"
-    except PermissionError:
-        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。"
-    except Exception as e:
-        print(f"Error appending project to Excel: {e}")
-        return False, str(e)
+        with zipfile.ZipFile(excel_path, 'r') as z:
+            sheet_drawing_rels = {}
+            for name in z.namelist():
+                if name.startswith("xl/drawings/_rels/") and name.endswith(".rels"):
+                    drawing_id = os.path.splitext(os.path.basename(name))[0].replace(".xml", "")
+                    rels_xml = z.read(name)
+                    root = ET.fromstring(rels_xml)
+                    target_map = {}
+                    for rel in root.findall('{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'):
+                        r_id = rel.attrib.get('Id')
+                        target = rel.attrib.get('Target')
+                        if target:
+                            norm_target = os.path.normpath(os.path.join("xl/drawings", target)).replace("\\", "/")
+                            target_map[r_id] = norm_target
+                    sheet_drawing_rels[drawing_id] = target_map
 
-
-def update_project_category_in_excel(excel_path, proj_path, sku, new_cat):
-    if not excel_path or not os.path.exists(excel_path):
-        return False
-    try:
-        wb = openpyxl.load_workbook(excel_path)
-        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
-        norm_cat = normalize_category(new_cat)
-        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/') if proj_path else ""
-        
-        updated = False
-        for r in range(2, ws.max_row + 1):
-            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
-            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
-            if (norm_proj_p and ex_p == norm_proj_p) or (sku and ex_name == sku):
-                ws.cell(row=r, column=4, value=norm_cat)
-                updated = True
-                break
-        if updated:
-            wb.save(excel_path)
-            wb.close()
-        return updated
-    except Exception as e:
-        print(f"Error updating category in Excel: {e}")
-        return False
-
-
-def update_thumbnail_to_excel(excel_path, proj_path, sku, thumb_path, cell_size=(60, 60)):
-    """将单个项目的渲染缩略图写入/更新至 Excel 对应行的 C 列 (图片列)"""
-    if not excel_path or not os.path.exists(excel_path) or not thumb_path or not os.path.exists(thumb_path):
-        return False, "参数无效或文件不存在"
-        
-    try:
-        temp_cell_thumb = os.path.join(THUMB_CACHE_DIR, f"excel_cell_{hashlib.md5(thumb_path.encode('utf-8')).hexdigest()[:12]}.jpg")
-        with Image.open(thumb_path) as im:
-            if im.mode != "RGB":
-                im = im.convert("RGB")
-            im.thumbnail(cell_size, Image.Resampling.BILINEAR)
-            im.save(temp_cell_thumb, format="JPEG", quality=85)
-            
-        wb = openpyxl.load_workbook(excel_path)
-        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
-        
-        norm_proj_p = proj_path.replace('\\', '/').lower().strip('/') if proj_path else ""
-        target_row = None
-        
-        for r in range(2, ws.max_row + 1):
-            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
-            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
-            if (norm_proj_p and ex_p == norm_proj_p) or (sku and ex_name == sku):
-                target_row = r
-                break
-                
-        if not target_row:
-            target_row = ws.max_row + 1
-            next_idx = ws.max_row
-            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            ws.cell(row=target_row, column=1, value=next_idx)
-            ws.cell(row=target_row, column=2, value=sku)
-            ws.cell(row=target_row, column=4, value="包装")
-            ws.cell(row=target_row, column=5, value=proj_path.replace('\\', '/') if proj_path else "")
-            ws.cell(row=target_row, column=6, value=now_str)
-
-        ws.row_dimensions[target_row].height = 48
-        ws.column_dimensions['C'].width = 11
-        
-        img = OpenpyxlImage(temp_cell_thumb)
-        img.width = 54
-        img.height = 54
-        ws.add_image(img, f"C{target_row}")
-        
-        wb.save(excel_path)
-        wb.close()
-        return True, f"✅ 成功将 [{sku}] 渲染缩略图写入表格第 {target_row} 行 (C{target_row})！"
-    except PermissionError:
-        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。"
-    except Exception as e:
-        return False, f"写入 Excel 失败: {e}"
-
-
-def batch_sync_all_thumbnails_to_excel(excel_path, projects):
-    """一键批量将所有有渲染图的项目的缩略图回填至 Excel 台账图片列"""
-    if not excel_path or not os.path.exists(excel_path):
-        return False, "Excel 文件不存在", 0
-        
-    try:
-        wb = openpyxl.load_workbook(excel_path)
-        ws = wb['全部'] if '全部' in wb.sheetnames else wb.active
-        ws.column_dimensions['C'].width = 11
-        
-        row_map = {}
-        for r in range(2, ws.max_row + 1):
-            ex_p = str(ws.cell(row=r, column=5).value or "").replace('\\', '/').lower().strip('/')
-            ex_name = str(ws.cell(row=r, column=2).value or "").strip()
-            if ex_p:
-                row_map[ex_p] = r
-            if ex_name:
-                row_map[ex_name.lower()] = r
-                
-        updated_count = 0
-        for p in projects:
-            thumb = p.get("thumbnail")
-            if not thumb or not os.path.exists(thumb):
-                continue
-                
-            norm_p = p["path"].replace('\\', '/').lower().strip('/') if p.get("path") else ""
-            sku_lower = str(p.get("sku", "")).lower().strip()
-            
-            target_row = None
-            if norm_p in row_map:
-                target_row = row_map[norm_p]
-            elif sku_lower in row_map:
-                target_row = row_map[sku_lower]
-                
-            if target_row:
-                temp_cell_thumb = os.path.join(THUMB_CACHE_DIR, f"excel_cell_{hashlib.md5(thumb.encode('utf-8')).hexdigest()[:12]}.jpg")
-                with Image.open(thumb) as im:
-                    if im.mode != "RGB":
-                        im = im.convert("RGB")
-                    im.thumbnail((60, 60), Image.Resampling.BILINEAR)
-                    im.save(temp_cell_thumb, format="JPEG", quality=85)
+            for name in z.namelist():
+                if name.startswith("xl/drawings/drawing") and name.endswith(".xml"):
+                    drawing_id = os.path.splitext(os.path.basename(name))[0]
+                    target_map = sheet_drawing_rels.get(drawing_id, {})
+                    xml_content = z.read(name)
+                    root = ET.fromstring(xml_content)
                     
-                ws.row_dimensions[target_row].height = 48
-                img = OpenpyxlImage(temp_cell_thumb)
-                img.width = 54
-                img.height = 54
-                ws.add_image(img, f"C{target_row}")
-                updated_count += 1
-                
-        wb.save(excel_path)
-        wb.close()
-        return True, f"🎉 成功将 {updated_count} 个项目的最新渲染缩略图同步嵌入到 Excel 台账！", updated_count
-    except PermissionError:
-        return False, "⚠️ 《产品列表.xlsx》当前正被 WPS 或 Excel 打开占用锁死！请先关闭表格后再同步。", 0
+                    for anchor in root.findall('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}twoCellAnchor') + \
+                                  root.findall('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}oneCellAnchor'):
+                        from_tag = anchor.find('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}from')
+                        if from_tag is not None:
+                            row_tag = from_tag.find('{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}row')
+                            if row_tag is not None:
+                                row_idx = int(row_tag.text) + 1
+                                blip = anchor.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+                                if blip is not None:
+                                    embed_id = blip.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                                    if embed_id and embed_id in target_map:
+                                        img_zip_path = target_map[embed_id]
+                                        ext = os.path.splitext(img_zip_path)[1]
+                                        img_hash = hashlib.md5(img_zip_path.encode('utf-8')).hexdigest()[:10]
+                                        out_name = f"row_{row_idx}_{img_hash}{ext}"
+                                        out_disk_path = os.path.join(EXCEL_CACHE_DIR, out_name)
+                                        if not os.path.exists(out_disk_path):
+                                            with open(out_disk_path, "wb") as f_out:
+                                                f_out.write(z.read(img_zip_path))
+                                        cell_image_map[row_idx] = out_disk_path
     except Exception as e:
-        return False, f"批量写入 Excel 失败: {e}", 0
+        print(f"Error extracting Excel drawing images: {e}")
+    return cell_image_map
 
+def normalize_category(raw_val):
+    if not raw_val:
+        return "包装"
+    s = str(raw_val).strip()
+    if "套盒" in s or "礼盒" in s:
+        return "套盒"
+    if "海报" in s or "KV" in s or "展板" in s or "主图" in s:
+        return "海报"
+    if "物料" in s or "单页" in s or "折页" in s or "展架" in s or "画册" in s:
+        return "物料"
+    return "包装"
 
-def get_file_md5(filepath):
+def parse_and_cache_excel(excel_path):
+    if not excel_path or not os.path.exists(excel_path):
+        return []
+    projects = []
     try:
-        h = hashlib.md5()
-        with open(filepath, 'rb') as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return None
-
-
-JUNK_NAME_KEYWORDS = {
-    '改', '改1', '改2', '改3', '改4', '改5', '修改', '修改版', '最新', '最终', '最终版', '定稿', '正稿',
-    '未命名', '未命名-1', '新建', '新建画板', '新建画板1', '新建画板2', '1', '2', '3', 'a', 'b', 'c',
-    '刀模', '包装', '瓶贴', '贴纸', '展开图', '画板', '副本', '111', '222', 'aaa'
-}
-
-def clean_and_parse_filename(filepath, fallback_brand="", valid_brands=None):
-    raw_name = os.path.splitext(os.path.basename(filepath))[0]
-    cleaned_base = re.sub(r'[\(\（]\s*\d+\s*[\)\）]', '', raw_name)
-    cleaned_base = re.sub(r'[-_ ]*副本\s*\d*', '', cleaned_base)
-    
-    noise_patterns = [
-        r'[-_ ]?(包装|刀模|展开图|正稿|定稿|完稿|原稿|印刷稿|平面|效果图)',
-        r'[-_ ]?(修改版|修改|最新版|最终版|最终|定案|终版|初稿|打样|打样稿)',
-        r'[-_ ]?(副本|\d{6,}|\d{4}年|\d{1,2}月\d{1,2}日)',
-        r'[-_ ]?([vV]\d+(\.\d+)?|改\d*|版\d*)',
-    ]
-    for p in noise_patterns:
-        cleaned_base = re.sub(p, '', cleaned_base, flags=re.IGNORECASE)
+        cell_images = extract_images_from_excel_zip(excel_path)
+        wb = openpyxl.load_workbook(excel_path, data_only=True, read_only=True)
+        sheet = wb.active
         
-    cleaned_base = cleaned_base.strip(" -_")
-    is_junk = cleaned_base.lower() in JUNK_NAME_KEYWORDS or len(cleaned_base) == 0
-    
-    brand = ""
-    sku = ""
-    if valid_brands:
-        for vb in valid_brands:
-            if cleaned_base.startswith(vb):
-                brand = vb
-                sku = cleaned_base[len(vb):].strip(" -_")
-                break
+        headers = {}
+        for col_idx, cell in enumerate(sheet[1], start=1):
+            if cell.value:
+                headers[str(cell.value).strip()] = col_idx
                 
-    if not brand:
-        parts = re.split(r'[-_—\s+]+', cleaned_base)
-        parts = [p.strip() for p in parts if p.strip()]
-        if len(parts) >= 2:
-            brand = parts[0]
-            sku = "_".join(parts[1:])
-        elif len(parts) == 1:
-            if is_junk:
-                brand = fallback_brand
-                sku = f"未命名_{raw_name}"
-            else:
-                brand = fallback_brand
-                sku = parts[0]
-        else:
-            brand = fallback_brand
-            sku = f"未命名_{raw_name}"
+        sku_col = headers.get("产品名称") or headers.get("SKU") or headers.get("品名") or 2
+        brand_col = headers.get("品牌") or headers.get("客户") or 1
+        cat_col = headers.get("业务形态") or headers.get("分类") or headers.get("类别") or None
+        time_col = headers.get("创建时间") or headers.get("日期") or None
+        
+        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            if not row or not any(row):
+                continue
+            sku_val = str(row[sku_col - 1]).strip() if len(row) >= sku_col and row[sku_col - 1] else ""
+            if not sku_val or sku_val == "None":
+                continue
+            brand_val = str(row[brand_col - 1]).strip() if len(row) >= brand_col and row[brand_col - 1] else ""
+            if brand_val == "None":
+                brand_val = ""
+            cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
+            cat_val = normalize_category(cat_val)
+            time_val = str(row[time_col - 1]).strip() if time_col and len(row) >= time_col and row[time_col - 1] else ""
+            if time_val == "None":
+                time_val = ""
+                
+            img_path = cell_images.get(row_idx, "")
             
-    # Windows 保留非法字符清洗
-    sku = re.sub(r'[:\\/*?\"<>|]', '_', sku).strip(" -_")
-    brand = re.sub(r'[:\\/*?\"<>|]', '_', brand).strip(" -_")
-    return brand, sku, is_junk
+            projects.append({
+                "source": "excel",
+                "brand": brand_val,
+                "sku": sku_val,
+                "cat": cat_val,
+                "path": "",
+                "thumbnail": img_path,
+                "time": time_val,
+                "row_idx": row_idx,
+                "mtime": 0
+            })
+        wb.close()
+    except Exception as e:
+        print(f"Error parsing Excel: {e}")
+    return projects
 
+def find_project_thumbnail(proj_dir):
+    if not proj_dir or not os.path.exists(proj_dir):
+        return None
+    render_candidates = [
+        os.path.join(proj_dir, "04_Renders_通道输出"),
+        os.path.join(proj_dir, "04_Renders_高清分层输出"),
+        os.path.join(proj_dir, "03_输出"),
+        os.path.join(proj_dir, "04_输出"),
+        os.path.join(proj_dir, "05_Delivery_最终交付"),
+        os.path.join(proj_dir, "Renders"),
+        proj_dir
+    ]
+    
+    img_exts = ("*.png", "*.jpg", "*.jpeg", "*.webp")
+    for r_dir in render_candidates:
+        if os.path.exists(r_dir):
+            imgs = []
+            for ext in img_exts:
+                imgs.extend(glob.glob(os.path.join(r_dir, ext)))
+                imgs.extend(glob.glob(os.path.join(r_dir, "*", ext)))
+            if imgs:
+                beauty_imgs = [
+                    f for f in imgs 
+                    if not any(ch in os.path.basename(f).lower() for ch in [
+                        "cryptomatte", "crypto", "选区", "normal", "法线", "depth", "深度", 
+                        "mist", "ao", "roughness", "specular", "alpha", "mask", "shadow"
+                    ])
+                ]
+                if beauty_imgs:
+                    beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    return beauty_imgs[0]
+                imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                return imgs[0]
+                
+    textures_dir = os.path.join(proj_dir, "02_Textures_贴图资产")
+    if os.path.exists(textures_dir):
+        imgs = []
+        for ext in img_exts:
+            imgs.extend(glob.glob(os.path.join(textures_dir, ext)))
+        if imgs:
+            imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            return imgs[0]
+            
+    return None
 
-def get_project_max_mtime(sku_p):
+def auto_detect_category_from_name(name):
+    if not name:
+        return "包装"
+    s = str(name).lower()
+    if "套盒" in s or "礼盒" in s:
+        return "套盒"
+    if "海报" in s or "kv" in s or "主图" in s or "展板" in s:
+        return "海报"
+    if "物料" in s or "单页" in s or "折页" in s or "展架" in s or "画册" in s:
+        return "物料"
+    return "包装"
+
+def get_project_max_mtime(proj_dir):
     try:
-        max_m = os.path.getmtime(sku_p)
-        for sub in ["04_Renders_通道输出", "04_Renders_高清分层输出", "03_输出", "05_Delivery_最终交付", "05_Final_精修定稿", "渲染", "Renders", "Output"]:
-            sub_p = os.path.join(sku_p, sub)
-            if os.path.exists(sub_p):
-                try:
-                    m = os.path.getmtime(sub_p)
-                    if m > max_m:
-                        max_m = m
-                except Exception:
-                    pass
+        max_m = os.path.getmtime(proj_dir)
+        for root, dirs, files in os.walk(proj_dir):
+            for d in dirs:
+                if d.lower() in SYSTEM_IGNORED_DIRS:
+                    dirs.remove(d)
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in ('.ai', '.blend', '.png', '.jpg', '.jpeg', '.psd', '.pdf'):
+                    fp = os.path.join(root, f)
+                    try:
+                        fm = os.path.getmtime(fp)
+                        if fm > max_m:
+                            max_m = fm
+                    except (PermissionError, OSError):
+                        pass
         return max_m
     except Exception:
         return 0
 
-
-def find_project_thumbnail(proj_path):
-    if not proj_path or not os.path.exists(proj_path):
-        return None
-
-    render_dirs = [
-        os.path.join(proj_path, "04_Renders_通道输出"),
-        os.path.join(proj_path, "04_Renders_高清分层输出"),
-        os.path.join(proj_path, "03_输出"),
-        os.path.join(proj_path, "05_Delivery_最终交付"),
-        os.path.join(proj_path, "05_Final_精修定稿"),
-        os.path.join(proj_path, "渲染"),
-        os.path.join(proj_path, "Renders"),
-        os.path.join(proj_path, "Output"),
-        proj_path
-    ]
-    candidates = []
-    supported_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
-    
-    for rdir in render_dirs:
-        if os.path.exists(rdir) and os.path.isdir(rdir):
-            try:
-                for f in os.listdir(rdir):
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in supported_exts:
-                        candidates.append(os.path.join(rdir, f))
-            except Exception:
-                pass
-                
-    if candidates:
-        beauty_imgs = [
-            c for c in candidates 
-            if any(k in os.path.basename(c).lower() for k in ["beauty", "成品", "主图", "camera", "正面", "01_", "main", "render", "preview", "final"])
-            and not any(bad in os.path.basename(c).lower() for bad in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness", "ao_"])
-        ]
-        if beauty_imgs:
-            try:
-                beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                return beauty_imgs[0]
-            except Exception:
-                return beauty_imgs[0]
-                
-        filtered = [
-            c for c in candidates 
-            if not any(bad in os.path.basename(c).lower() for bad in ["mask", "alpha", "crypto", "选区", "蒙版", "normal", "depth", "roughness", "ao_", "diffuse"])
-        ]
-        if filtered:
-            try:
-                filtered.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                return filtered[0]
-            except Exception:
-                return filtered[0]
-                
-        try:
-            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return candidates[0]
-        except Exception:
-            return candidates[0]
-            
-    return None
-
-
-def parse_and_cache_excel(excel_path):
+def scan_workspace_projects_fast(ws_root, meta_cache):
+    if not ws_root or not os.path.exists(ws_root):
+        return []
     projects = []
-    if not excel_path or not os.path.exists(excel_path):
-        return projects
-
-    try:
-        wb = openpyxl.load_workbook(excel_path, data_only=True)
-        sheet = wb['全部'] if '全部' in wb.sheetnames else wb.active
-        
-        row_image_map = {}
-        with zipfile.ZipFile(excel_path, 'r') as z:
-            if 'xl/drawings/drawing1.xml' in z.namelist() and 'xl/drawings/_rels/drawing1.xml.rels' in z.namelist():
-                drawing_xml = z.read('xl/drawings/drawing1.xml')
-                rels_xml = z.read('xl/drawings/_rels/drawing1.xml.rels')
-
-                root_d = ET.fromstring(drawing_xml)
-                root_r = ET.fromstring(rels_xml)
-
-                rel_map = {}
-                for rel in root_r:
-                    r_id = rel.attrib.get('Id')
-                    target = rel.attrib.get('Target')
-                    t_clean = target.lstrip('/').replace('../', '')
-                    if not t_clean.startswith('xl/'):
-                        t_clean = 'xl/' + t_clean
-                    rel_map[r_id] = t_clean
-
-                ns = {
-                    'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
-                    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-                }
-
-                for anchor in root_d.findall('.//xdr:twoCellAnchor', ns) + root_d.findall('.//xdr:oneCellAnchor', ns):
-                    from_elem = anchor.find('xdr:from', ns)
-                    if from_elem is not None:
-                        row_idx = int(from_elem.find('xdr:row', ns).text) + 1
-                        blip = anchor.find('.//a:blip', ns)
-                        if blip is not None:
-                            embed_id = blip.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
-                            if embed_id and embed_id in rel_map:
-                                media_path = rel_map[embed_id]
-                                ext = os.path.splitext(media_path)[1]
-                                out_filename = f"excel_img_r{row_idx}{ext}"
-                                out_full = os.path.join(EXCEL_CACHE_DIR, out_filename)
-                                with open(out_full, 'wb') as f_out:
-                                    f_out.write(z.read(media_path))
-                                row_image_map[row_idx] = out_full
-
-        for r in range(2, sheet.max_row + 1):
-            name = sheet.cell(row=r, column=2).value
-            raw_cat = sheet.cell(row=r, column=4).value or "包装"
-            path = sheet.cell(row=r, column=5).value or ""
-            time_str = sheet.cell(row=r, column=6).value or ""
-
-            if not name:
-                continue
-
-            thumb = row_image_map.get(r, None)
-            norm_path = path.replace("/", "\\") if path else ""
-
-            brand = "柏缇"
-            if norm_path:
-                parts = norm_path.strip("\\").split("\\")
-                if len(parts) >= 2 and parts[-2] not in {"zjc", "Projects", "E:", "D:", "包装", "套盒", "海报", "物料"}:
-                    brand = parts[-2]
-
-            projects.append({
-                "source": "excel",
-                "brand": brand,
-                "sku": str(name).strip(),
-                "cat": normalize_category(raw_cat),
-                "path": norm_path,
-                "thumbnail": thumb,
-                "time": str(time_str),
-                "mtime": os.path.getmtime(norm_path) if (norm_path and os.path.exists(norm_path)) else 0
-            })
-
-    except Exception as e:
-        print(f"Error parsing Excel: {e}")
-
-    return projects
-
-
-def scan_workspace_projects_fast(root_dir, meta_cache):
-    projects = []
-    if not os.path.exists(root_dir):
-        return projects
-    try:
-        entries = os.listdir(root_dir)
-    except (PermissionError, OSError):
-        return projects
-        
     cache_dirty = False
     
+    try:
+        entries = os.listdir(ws_root)
+    except Exception:
+        return []
+        
     for entry in entries:
-        if entry.lower() in SYSTEM_IGNORED_DIRS or entry.startswith('.') or entry.startswith('$') or entry.startswith('_'):
+        if entry.lower() in SYSTEM_IGNORED_DIRS:
             continue
-        brand_p = os.path.join(root_dir, entry)
+        brand_p = os.path.join(ws_root, entry)
+        if not os.path.isdir(brand_p):
+            continue
+            
         try:
-            if not os.path.isdir(brand_p):
-                continue
-            sub_entries = os.listdir(brand_p)
+            skus = os.listdir(brand_p)
         except (PermissionError, OSError):
             continue
             
-        for sku in sub_entries:
-            if sku.lower() in SYSTEM_IGNORED_DIRS or sku.startswith('.') or sku.startswith('$') or sku.startswith('_'):
+        for sku in skus:
+            if sku.lower() in SYSTEM_IGNORED_DIRS:
                 continue
             sku_p = os.path.join(brand_p, sku)
             try:
@@ -821,939 +524,387 @@ def scan_workspace_projects_fast(root_dir, meta_cache):
     projects.sort(key=lambda x: x["mtime"], reverse=True)
     return projects
 
-
 def merge_excel_and_disk_projects(excel_projects, disk_projects):
     disk_map = {}
     for dp in disk_projects:
-        norm_p = dp["path"].lower().replace("/", "\\").strip("\\")
+        norm_p = dp["path"].lower().replace("/", "\\")
         disk_map[norm_p] = dp
-        sku_key = f"{dp['brand']}@@{dp['sku']}".lower()
-        disk_map[sku_key] = dp
-
-    merged = []
-    handled_disk_keys = set()
-
-    for ep in excel_projects:
-        norm_ep = ep["path"].lower().replace("/", "\\").strip("\\") if ep.get("path") else ""
-        sku_key = f"{ep.get('brand', '')}@@{ep.get('sku', '')}".lower()
+        sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', dp["sku"].lower())
+        disk_map[f"sku:{sku_clean}"] = dp
         
-        matched_disk_proj = None
-        if norm_ep and norm_ep in disk_map:
-            matched_disk_proj = disk_map[norm_ep]
-        elif sku_key in disk_map:
-            matched_disk_proj = disk_map[sku_key]
-
-        if matched_disk_proj:
-            dp = matched_disk_proj
-            handled_disk_keys.add(dp["path"].lower().replace("/", "\\").strip("\\"))
-            thumb = dp["thumbnail"] if dp["thumbnail"] else ep["thumbnail"]
-            mtime = dp["mtime"] if dp["mtime"] > 0 else ep["mtime"]
-            merged.append({
-                "source": "disk_prioritized",
-                "brand": dp["brand"],
-                "sku": dp["sku"],
-                "cat": normalize_category(ep.get("cat", dp.get("cat", "包装"))),
-                "path": dp["path"],
-                "thumbnail": thumb,
-                "time": ep.get("time", ""),
-                "mtime": mtime
-            })
-        else:
-            merged.append(ep)
-
+    merged = []
+    matched_disk_paths = set()
+    
+    for ep in excel_projects:
+        sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', ep["sku"].lower())
+        matched_dp = disk_map.get(f"sku:{sku_clean}")
+        
+        item = {
+            "source": "merged" if matched_dp else "excel",
+            "brand": ep.get("brand") or (matched_dp.get("brand") if matched_dp else ""),
+            "sku": ep["sku"],
+            "cat": ep.get("cat") or (matched_dp.get("cat") if matched_dp else "包装"),
+            "time": ep.get("time", ""),
+            "row_idx": ep.get("row_idx", 0),
+            "path": matched_dp["path"] if matched_dp else "",
+            "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and os.path.exists(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
+            "mtime": matched_dp["mtime"] if matched_dp else 0
+        }
+        if matched_dp:
+            matched_disk_paths.add(matched_dp["path"].lower().replace("/", "\\"))
+        merged.append(item)
+        
     for dp in disk_projects:
-        norm_p = dp["path"].lower().replace("/", "\\").strip("\\")
-        if norm_p not in handled_disk_keys:
-            merged.append(dp)
-
-    merged.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+        norm_p = dp["path"].lower().replace("/", "\\")
+        if norm_p not in matched_disk_paths:
+            merged.append({
+                "source": "disk",
+                "brand": dp.get("brand", ""),
+                "sku": dp["sku"],
+                "cat": dp.get("cat", "包装"),
+                "time": "",
+                "row_idx": 0,
+                "path": dp["path"],
+                "thumbnail": dp.get("thumbnail"),
+                "mtime": dp.get("mtime", 0)
+            })
+            
+    merged.sort(key=lambda x: x["mtime"], reverse=True)
     return merged
 
+def update_thumbnail_to_excel(excel_path, proj_path, sku, thumb_path):
+    if not excel_path or not os.path.exists(excel_path):
+        return False, "Excel 文件未找到！"
+    if not thumb_path or not os.path.exists(thumb_path):
+        return False, f"未找到可用的缩略图文件: {thumb_path}"
 
-# ==============================================================================
-# 文件夹规则管理器弹窗 (Folder Rules Manager Modal Dialog)
-# ==============================================================================
-class FolderRuleManagerDialog(tk.Toplevel):
-    def __init__(self, parent, rules, active_rule_id, on_save_callback, colors):
-        super().__init__(parent)
-        self.title("⚙️ 自定义文件夹归档规则管理器")
-        self.geometry("820x620")
-        self.minsize(720, 520)
-        self.colors = colors
-        self.configure(bg=colors["bg"])
-        self.transient(parent)
-        self.grab_set()
+    try:
+        temp_img_path = get_fast_disk_thumbnail_path(thumb_path, size=(200, 200))
+        if not temp_img_path or not os.path.exists(temp_img_path):
+            temp_img_path = thumb_path
+            
+        wb = openpyxl.load_workbook(excel_path)
+        sheet = wb.active
         
-        self.rules = [dict(r) for r in rules]  # deep copy
-        self.active_rule_id = active_rule_id
-        self.on_save_callback = on_save_callback
-        self.current_rule_idx = 0
-        
-        # 寻找当前激活的规则索引
-        for i, r in enumerate(self.rules):
-            if r.get("id") == self.active_rule_id:
-                self.current_rule_idx = i
+        target_row = None
+        sku_col = 2
+        for col_idx, cell in enumerate(sheet[1], start=1):
+            val = str(cell.value or "").strip()
+            if val in ("产品名称", "SKU", "品名"):
+                sku_col = col_idx
                 break
                 
-        self.build_ui()
-        self.load_rule_to_editor(self.current_rule_idx)
-
-    def build_ui(self):
-        c = self.colors
-        
-        # 主布局左右分栏
-        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
-        
-        # 左侧：规则列表
-        left_frame = ttk.LabelFrame(paned, text=" 📂 规则库列表 ", padding=8, width=240)
-        paned.add(left_frame, weight=1)
-        
-        self.rule_listbox = tk.Listbox(
-            left_frame,
-            font=("Microsoft YaHei", 9),
-            bg=c["panel_bg"],
-            fg=c["fg"],
-            selectbackground=c["primary"],
-            selectforeground="#FFFFFF",
-            relief=tk.FLAT,
-            highlightthickness=0,
-            activestyle="none"
-        )
-        self.rule_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-        self.rule_listbox.bind("<<ListboxSelect>>", self.on_select_rule_list)
-        
-        left_btn_row = ttk.Frame(left_frame)
-        left_btn_row.pack(fill=tk.X)
-        ttk.Button(left_btn_row, text="➕ 新建", width=6, command=self.add_new_rule).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(left_btn_row, text="📋 复制", width=6, command=self.duplicate_rule).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(left_btn_row, text="🗑️ 删除", width=6, command=self.delete_rule).pack(side=tk.LEFT)
-        
-        # 右侧：规则编辑器
-        right_frame = ttk.LabelFrame(paned, text=" 🛠️ 规则详细配置与目录树预览 ", padding=12)
-        paned.add(right_frame, weight=3)
-        
-        # 1. 规则名称 & 描述
-        f_info = ttk.Frame(right_frame)
-        f_info.pack(fill=tk.X, pady=(0, 8))
-        
-        ttk.Label(f_info, text="规则名称:").grid(row=0, column=0, sticky="w", pady=3)
-        self.name_var = tk.StringVar()
-        ttk.Entry(f_info, textvariable=self.name_var, width=32, font=("Microsoft YaHei", 9, "bold")).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=3)
-        
-        ttk.Label(f_info, text="规则说明:").grid(row=1, column=0, sticky="w", pady=3)
-        self.desc_var = tk.StringVar()
-        ttk.Entry(f_info, textvariable=self.desc_var, width=32).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=3)
-        f_info.columnconfigure(1, weight=1)
-        
-        # 2. 根路径层级组织
-        f_pattern = ttk.Frame(right_frame)
-        f_pattern.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(f_pattern, text="目录层级架构:").pack(side=tk.LEFT, padx=(0, 8))
-        self.pattern_var = tk.StringVar(value="{brand}/{sku}")
-        self.combo_pattern = ttk.Combobox(
-            f_pattern,
-            textvariable=self.pattern_var,
-            values=[
-                "{brand}/{sku} (推荐：工作盘/客户/SKU)",
-                "{category}/{brand}/{sku} (工作盘/业务形态/客户/SKU)",
-                "{sku} (工作盘/仅SKU目录)"
-            ],
-            state="readonly",
-            width=36
-        )
-        self.combo_pattern.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.combo_pattern.bind("<<ComboboxSelected>>", lambda e: self.update_tree_preview())
-
-        # 3. 子文件夹列表编辑
-        f_subs = ttk.LabelFrame(right_frame, text=" 📁 子文件夹清单 (每行一个文件夹，将自动按顺序创建) ", padding=8)
-        f_subs.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-        
-        self.txt_subs = tk.Text(
-            f_subs,
-            height=6,
-            font=("Consolas", 10),
-            bg=c["input_bg"],
-            fg=c["input_fg"],
-            insertbackground=c["fg"],
-            relief=tk.FLAT,
-            bd=1
-        )
-        self.txt_subs.pack(fill=tk.BOTH, expand=True)
-        self.txt_subs.bind("<KeyRelease>", lambda e: self.on_subs_text_changed())
-
-        # 4. 自动分流关联设置
-        f_mapping = ttk.Frame(right_frame)
-        f_mapping.pack(fill=tk.X, pady=(0, 8))
-        
-        ttk.Label(f_mapping, text="源文件存入:").grid(row=0, column=0, sticky="w", pady=3)
-        self.design_sub_var = tk.StringVar()
-        self.combo_design = ttk.Combobox(f_mapping, textvariable=self.design_sub_var, width=22)
-        self.combo_design.grid(row=0, column=1, sticky="w", padx=(6, 16), pady=3)
-        
-        ttk.Label(f_mapping, text="3D工程生成于:").grid(row=0, column=2, sticky="w", pady=3)
-        self.blend_sub_var = tk.StringVar()
-        self.combo_blend = ttk.Combobox(f_mapping, textvariable=self.blend_sub_var, width=22)
-        self.combo_blend.grid(row=0, column=3, sticky="w", padx=(6, 0), pady=3)
-
-        ttk.Label(f_mapping, text="渲染图输出于:").grid(row=1, column=0, sticky="w", pady=3)
-        self.render_sub_var = tk.StringVar()
-        self.combo_render = ttk.Combobox(f_mapping, textvariable=self.render_sub_var, width=22)
-        self.combo_render.grid(row=1, column=1, sticky="w", padx=(6, 16), pady=3)
-        
-        # 5. 实时效果预览
-        f_prev = ttk.LabelFrame(right_frame, text=" 🌲 生成目录效果实时预览 ", padding=6)
-        f_prev.pack(fill=tk.X, pady=(0, 8))
-        
-        self.lbl_preview = tk.Label(
-            f_prev,
-            text="",
-            font=("Consolas", 9),
-            bg=c["panel_bg"],
-            fg=c["fg_muted"],
-            justify="left",
-            anchor="w",
-            padx=6,
-            pady=4
-        )
-        self.lbl_preview.pack(fill=tk.X)
-
-        # 底部保存按钮行
-        b_bar = ttk.Frame(self, padding=(16, 8))
-        b_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        ttk.Button(b_bar, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
-        btn_apply = tk.Button(
-            b_bar,
-            text="💾 保存并设为当前活动规则",
-            font=("Microsoft YaHei", 9, "bold"),
-            bg=c["primary"],
-            fg="#FFFFFF",
-            relief=tk.FLAT,
-            padx=16,
-            pady=6,
-            command=self.save_and_apply
-        )
-        btn_apply.pack(side=tk.RIGHT)
-        
-        self.refresh_rule_listbox()
-
-    def refresh_rule_listbox(self):
-        self.rule_listbox.delete(0, tk.END)
-        for i, r in enumerate(self.rules):
-            active_mark = " (当前)" if r.get("id") == self.active_rule_id else ""
-            self.rule_listbox.insert(tk.END, f"{r.get('name', '未命名规则')}{active_mark}")
+        sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower()) if sku else ""
+        for r in range(2, sheet.max_row + 1):
+            cell_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+            cell_clean = re.sub(r'[\s_\-\(\)（）]+', '', cell_val.lower())
+            if sku_clean and cell_clean and (sku_clean == cell_clean or sku_clean in cell_clean or cell_clean in sku_clean):
+                target_row = r
+                break
+                
+        if not target_row:
+            target_row = sheet.max_row + 1
+            sheet.cell(row=target_row, column=sku_col, value=sku)
             
-        if 0 <= self.current_rule_idx < len(self.rules):
-            self.rule_listbox.select_set(self.current_rule_idx)
-
-    def load_rule_to_editor(self, idx):
-        if not (0 <= idx < len(self.rules)):
-            return
-        self.current_rule_idx = idx
-        r = self.rules[idx]
+        img_cell = f"C{target_row}"
         
-        self.name_var.set(r.get("name", ""))
-        self.desc_var.set(r.get("desc", ""))
+        img = OpenpyxlImage(temp_img_path)
+        img.width = 75
+        img.height = 75
         
-        pat = r.get("path_pattern", "{brand}/{sku}")
-        if "{category}" in pat:
-            self.combo_pattern.current(1)
-        elif "{brand}" in pat:
-            self.combo_pattern.current(0)
-        else:
-            self.combo_pattern.current(2)
-            
-        subs = r.get("subfolders", [])
-        self.txt_subs.delete("1.0", tk.END)
-        self.txt_subs.insert(tk.END, "\n".join(subs))
+        sheet.row_dimensions[target_row].height = 65
+        sheet.column_dimensions['C'].width = 14
         
-        self.on_subs_text_changed(initial=True)
-        self.design_sub_var.set(r.get("design_sub", subs[0] if subs else ""))
-        self.blend_sub_var.set(r.get("blend_sub", subs[2] if len(subs) > 2 else (subs[0] if subs else "")))
-        self.render_sub_var.set(r.get("render_sub", subs[3] if len(subs) > 3 else (subs[0] if subs else "")))
-        
-        self.update_tree_preview()
-
-    def save_current_editor_to_memory(self):
-        if not (0 <= self.current_rule_idx < len(self.rules)):
-            return
-        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
-        pat_raw = self.combo_pattern.get()
-        if "{category}" in pat_raw:
-            pat = "{category}/{brand}/{sku}"
-        elif "{brand}" in pat_raw:
-            pat = "{brand}/{sku}"
-        else:
-            pat = "{sku}"
-            
-        r = self.rules[self.current_rule_idx]
-        r["name"] = self.name_var.get().strip() or "自定义规则"
-        r["desc"] = self.desc_var.get().strip()
-        r["path_pattern"] = pat
-        r["subfolders"] = subs
-        r["design_sub"] = self.design_sub_var.get().strip() or (subs[0] if subs else "")
-        r["blend_sub"] = self.blend_sub_var.get().strip() or (subs[2] if len(subs) > 2 else (subs[0] if subs else ""))
-        r["render_sub"] = self.render_sub_var.get().strip() or (subs[3] if len(subs) > 3 else (subs[0] if subs else ""))
-
-    def on_select_rule_list(self, event=None):
-        sel = self.rule_listbox.curselection()
-        if not sel:
-            return
-        self.save_current_editor_to_memory()
-        self.load_rule_to_editor(sel[0])
-
-    def on_subs_text_changed(self, initial=False):
-        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
-        self.combo_design["values"] = subs
-        self.combo_blend["values"] = subs
-        self.combo_render["values"] = subs
-        
-        if not initial:
-            if subs:
-                if self.design_sub_var.get() not in subs:
-                    self.design_sub_var.set(subs[0])
-                if self.blend_sub_var.get() not in subs:
-                    self.blend_sub_var.set(subs[2] if len(subs) > 2 else subs[0])
-                if self.render_sub_var.get() not in subs:
-                    self.render_sub_var.set(subs[3] if len(subs) > 3 else (subs[-1] if subs else ""))
-            self.update_tree_preview()
-
-    def update_tree_preview(self):
-        pat_raw = self.combo_pattern.get()
-        if "{category}" in pat_raw:
-            base_dir = "E:\\zjc\\包装\\柏缇\\玫瑰水乳"
-        elif "{brand}" in pat_raw:
-            base_dir = "E:\\zjc\\柏缇\\玫瑰水乳"
-        else:
-            base_dir = "E:\\zjc\\玫瑰水乳"
-            
-        subs = [line.strip() for line in self.txt_subs.get("1.0", tk.END).split("\n") if line.strip()]
-        d_sub = self.design_sub_var.get()
-        b_sub = self.blend_sub_var.get()
-        r_sub = self.render_sub_var.get()
-        
-        lines = [f"📁 {base_dir}"]
-        for i, s in enumerate(subs):
-            prefix = "└── " if i == len(subs) - 1 else "├── "
-            tags = []
-            if s == d_sub:
-                tags.append("📥 源文件归档处")
-            if s == b_sub:
-                tags.append("✨ 自动生成.blend")
-            if s == r_sub:
-                tags.append("🖼️ 渲染图封面来源")
-            tag_str = f"  <-- [{' | '.join(tags)}]" if tags else ""
-            lines.append(f"{prefix}📁 {s}{tag_str}")
-            
-        if not subs:
-            lines.append("└── ⚠️ (请在上方输入至少一个子目录名称)")
-            
-        self.lbl_preview.config(text="\n".join(lines))
-
-    def add_new_rule(self):
-        self.save_current_editor_to_memory()
-        new_id = f"custom_rule_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        new_rule = {
-            "id": new_id,
-            "name": f"✨ 自定义规则 {len(self.rules) + 1}",
-            "desc": "用户自定义的个性化文件夹结构规则",
-            "path_pattern": "{brand}/{sku}",
-            "subfolders": ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"],
-            "design_sub": "01_Design_平面原稿",
-            "blend_sub": "03_3D_三维工程",
-            "render_sub": "04_Renders_通道输出"
-        }
-        self.rules.append(new_rule)
-        self.current_rule_idx = len(self.rules) - 1
-        self.refresh_rule_listbox()
-        self.load_rule_to_editor(self.current_rule_idx)
-
-    def duplicate_rule(self):
-        if not (0 <= self.current_rule_idx < len(self.rules)):
-            return
-        self.save_current_editor_to_memory()
-        cur = self.rules[self.current_rule_idx]
-        new_id = f"custom_rule_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        new_rule = dict(cur)
-        new_rule["id"] = new_id
-        new_rule["name"] = f"{cur.get('name', '规则')} (副本)"
-        new_rule["subfolders"] = list(cur.get("subfolders", []))
-        self.rules.append(new_rule)
-        self.current_rule_idx = len(self.rules) - 1
-        self.refresh_rule_listbox()
-        self.load_rule_to_editor(self.current_rule_idx)
-
-    def delete_rule(self):
-        if len(self.rules) <= 1:
-            messagebox.showwarning("提示", "必须至少保留一个文件夹归档规则！")
-            return
-        r = self.rules[self.current_rule_idx]
-        if messagebox.askyesno("确认删除", f"确定要删除规则【{r.get('name')}】吗？"):
-            del self.rules[self.current_rule_idx]
-            if self.active_rule_id == r.get("id"):
-                self.active_rule_id = self.rules[0]["id"]
-            self.current_rule_idx = max(0, self.current_rule_idx - 1)
-            self.refresh_rule_listbox()
-            self.load_rule_to_editor(self.current_rule_idx)
-
-    def save_and_apply(self):
-        self.save_current_editor_to_memory()
-        cur = self.rules[self.current_rule_idx]
-        self.active_rule_id = cur.get("id")
-        self.on_save_callback(self.rules, self.active_rule_id)
-        self.destroy()
-
-
-def safe_create_blend_from_blender(blender_exe, target_blend_path):
-    if not os.path.exists(blender_exe):
-        return False
-    safe_path_repr = json.dumps(os.path.abspath(target_blend_path))
-    py_expr = f"import bpy; bpy.ops.wm.save_as_mainfile(filepath={safe_path_repr})"
-    try:
-        res = subprocess.run(
-            [blender_exe, "--background", "--factory-startup", "--python-expr", py_expr],
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
-        return res.returncode == 0 and os.path.exists(target_blend_path)
+        sheet.add_image(img, img_cell)
+        wb.save(excel_path)
+        wb.close()
+        return True, f"已成功将 [{sku}] 的缩略图写入 Excel 单元格 {img_cell}！"
+    except PermissionError:
+        return False, f"无法保存 Excel！请先关闭正在打开《产品列表.xlsx》的 WPS 或 Excel 程序后重试。"
     except Exception as e:
-        print(f"Error creating blend via Blender: {e}")
-        return False
+        return False, f"写入 Excel 缩略图失败: {str(e)}"
 
-
-# ==============================================================================
-# 主应用程序 (Main Packaging Studio Suite)
-# ==============================================================================
-class PackagingStudioSuite:
-    def __init__(self, root, initial_files=None):
-        self.root = root
-        self.root.title("美术资产中枢 - Art Asset Hub (v1.0 正式版)")
-        self.root.geometry("1260x830")
-        self.root.minsize(1020, 660)
+def batch_sync_all_thumbnails_to_excel(excel_path, projects):
+    if not excel_path or not os.path.exists(excel_path):
+        return False, "Excel 文件未找到！"
         
+    valid_items = [p for p in projects if p.get("thumbnail") and os.path.exists(p["thumbnail"])]
+    if not valid_items:
+        return False, "当前没有找到任何带有有效缩略图的项目！"
+        
+    success_count = 0
+    try:
+        wb = openpyxl.load_workbook(excel_path)
+        sheet = wb.active
+        
+        sku_col = 2
+        for col_idx, cell in enumerate(sheet[1], start=1):
+            val = str(cell.value or "").strip()
+            if val in ("产品名称", "SKU", "品名"):
+                sku_col = col_idx
+                break
+                
+        row_map = {}
+        for r in range(2, sheet.max_row + 1):
+            c_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+            if c_val:
+                c_clean = re.sub(r'[\s_\-\(\)（）]+', '', c_val.lower())
+                row_map[c_clean] = r
+                
+        sheet.column_dimensions['C'].width = 14
+        
+        for item in valid_items:
+            sku = item.get("sku", "")
+            sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower()) if sku else ""
+            target_row = row_map.get(sku_clean)
+            if not target_row:
+                for c_clean, r_idx in row_map.items():
+                    if sku_clean and (sku_clean in c_clean or c_clean in sku_clean):
+                        target_row = r_idx
+                        break
+            if not target_row:
+                continue
+                
+            thumb_path = item["thumbnail"]
+            temp_img_path = get_fast_disk_thumbnail_path(thumb_path, size=(180, 180)) or thumb_path
+            
+            try:
+                img = OpenpyxlImage(temp_img_path)
+                img.width = 75
+                img.height = 75
+                sheet.row_dimensions[target_row].height = 65
+                sheet.add_image(img, f"C{target_row}")
+                success_count += 1
+            except Exception:
+                pass
+                
+        wb.save(excel_path)
+        wb.close()
+        return True, f"🎉 批量同步完成！已成功将 {success_count} 个项目的渲染图写入 Excel 台账！"
+    except PermissionError:
+        return False, "无法保存 Excel！请先关闭 WPS 或 Excel 后重试。"
+    except Exception as e:
+        return False, f"批量同步发生异常: {str(e)}"
+
+# ----------------- 内嵌 HTTP 资源与缩略图服务端 -----------------
+class AppHttpHandler(http.server.BaseHTTPRequestHandler):
+    bridge_api = None
+    
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+        
+        if path == "/" or path == "/index.html":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(FRONTEND_HTML.encode("utf-8"))
+        elif path == "/api/thumb":
+            img_path = query.get("path", [""])[0]
+            if img_path and os.path.exists(img_path):
+                w = int(query.get("w", [260])[0])
+                h = int(query.get("h", [260])[0])
+                fast_p = get_fast_disk_thumbnail_path(img_path, (w, h))
+                if fast_p and os.path.exists(fast_p):
+                    try:
+                        with open(fast_p, "rb") as f:
+                            content = f.read()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/jpeg")
+                        self.send_header("Cache-Control", "public, max-age=86400")
+                        self.end_headers()
+                        self.wfile.write(content)
+                        return
+                    except Exception:
+                        pass
+            self.send_response(404)
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+# ----------------- JS-Python 桥接 API 类 -----------------
+class PackagingBridgeAPI:
+    def __init__(self):
         self.cfg = load_config()
         self.meta_cache = load_meta_cache()
-        self.current_theme = self.cfg.get("theme", "dark")
-        self.colors = THEMES.get(self.current_theme, THEMES["dark"])
-        
-        self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        cur_ws = self.cfg.get("current_workspace", self.workspaces[0])
-        if not os.path.exists(cur_ws) and self.workspaces:
-            cur_ws = self.workspaces[0]
-        self.current_workspace_var = tk.StringVar(value=cur_ws)
-        self.excel_path_var = tk.StringVar(value=self.cfg.get("excel_path", DEFAULT_EXCEL_PATH))
-        
-        # 文件夹规则库
-        self.folder_rules = self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES)
-        self.active_rule_id = self.cfg.get("active_rule_id", "standard_packaging_5stage")
-        self.active_rule_name_var = tk.StringVar()
-        self.update_active_rule_name_var()
-        
-        # 归档页变量
-        self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
-        self.current_brand_var = tk.StringVar(value=self.cfg.get("current_brand", self.curated_brands[0]))
-        self.current_cat_var = tk.StringVar(value=self.cfg.get("default_category", "包装"))
-        self.auto_create_blend_var = tk.BooleanVar(value=self.cfg.get("auto_create_blend", True))
-        self.auto_open_blender_var = tk.BooleanVar(value=self.cfg.get("auto_open_blender", True))
-        self.auto_open_ai_var = tk.BooleanVar(value=self.cfg.get("auto_open_ai", True))
-        self.auto_append_excel_var = tk.BooleanVar(value=self.cfg.get("auto_append_to_excel", True))
-        self.files_to_organize = []
-        
-        # 资产看板页变量
-        self.view_mode_var = tk.StringVar(value="merged")
-        self.search_var = tk.StringVar()
-        self.selected_category_var = tk.StringVar(value="全部")
-        self.page_size = 48
-        self.current_page = 0
-        self.last_excel_mtime = 0
-        self.search_debounce_job = None
-        
-        # 异步线程池与渲染版本管理
-        self.thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        self.page_render_generation = 0
-        self._resize_debounce_job = None
-        self._last_cols = 0
-        
         self.excel_projects = []
         self.disk_projects = []
         self.merged_projects = []
-        self.current_display_list = []
-        self.filtered_projects = []
-        
-        self.thumb_tk_cache = {}
-        self.card_slots = []
-        
-        self.load_app_icon()
-        self.setup_styles()
-        self.build_ui()
-        self.init_card_slots(48)
-        self.load_all_asset_data()
-        self.start_excel_auto_sync_watcher()
-        
-        if initial_files:
-            self.notebook.select(1)
-            self.add_files_to_organizer(initial_files)
-        else:
-            self.notebook.select(0)
+        self.window = None
 
-    def update_active_rule_name_var(self):
-        for r in self.folder_rules:
-            if r.get("id") == self.active_rule_id:
-                self.active_rule_name_var.set(r.get("name", "标准规则"))
-                return
-        if self.folder_rules:
-            self.active_rule_id = self.folder_rules[0]["id"]
-            self.active_rule_name_var.set(self.folder_rules[0]["name"])
+    def set_window(self, win):
+        self.window = win
+
+    def get_init_data(self):
+        self.cfg = load_config()
+        return {
+            "config": self.cfg,
+            "workspaces": self.cfg.get("workspaces", DEFAULT_WORKSPACES),
+            "current_workspace": self.cfg.get("current_workspace", DEFAULT_WORKSPACES[0]),
+            "excel_path": self.cfg.get("excel_path", DEFAULT_EXCEL_PATH),
+            "curated_brands": self.cfg.get("curated_brands", ["柏缇", "零食有鸣"]),
+            "current_brand": self.cfg.get("current_brand", "柏缇"),
+            "default_category": self.cfg.get("default_category", "包装"),
+            "folder_rules": self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES),
+            "active_rule_id": self.cfg.get("active_rule_id", "standard_packaging_5stage"),
+            "theme": self.cfg.get("theme", "dark")
+        }
+
+    def load_all_projects(self):
+        ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+        cur_ws = self.cfg.get("current_workspace", DEFAULT_WORKSPACES[0])
+        
+        self.excel_projects = parse_and_cache_excel(ex_path) if (ex_path and os.path.exists(ex_path)) else []
+        self.disk_projects = scan_workspace_projects_fast(cur_ws, self.meta_cache) if (cur_ws and os.path.exists(cur_ws)) else []
+        self.merged_projects = merge_excel_and_disk_projects(self.excel_projects, self.disk_projects)
+        
+        return {
+            "merged": self.merged_projects,
+            "excel": self.excel_projects,
+            "disk": self.disk_projects
+        }
+
+    def open_folder(self, folder_path):
+        if folder_path and os.path.exists(folder_path):
+            try:
+                os.startfile(folder_path)
+                return {"success": True}
+            except Exception as e:
+                return {"success": False, "msg": str(e)}
+        return {"success": False, "msg": f"路径不存在: {folder_path}"}
+
+    def launch_blend(self, proj_path):
+        if not proj_path or not os.path.exists(proj_path):
+            return {"success": False, "msg": f"未找到工程目录: {proj_path}"}
+            
+        rule = self.get_current_folder_rule()
+        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
+        blend_dir = os.path.join(proj_path, blend_sub) if blend_sub else proj_path
+        target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
+        
+        blends = glob.glob(os.path.join(target_dir, "*.blend"))
+        if blends:
+            blends.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            chosen = blends[0]
+            try:
+                subprocess.Popen([BLENDER_EXE, chosen])
+                return {"success": True, "msg": f"已启动 Blender: {os.path.basename(chosen)}"}
+            except Exception:
+                os.startfile(chosen)
+                return {"success": True, "msg": f"已使用默认程序打开: {os.path.basename(chosen)}"}
+        else:
+            self.open_folder(proj_path)
+            return {"success": True, "msg": "未找到 .blend 工程文件，已为你打开工程文件夹。"}
 
     def get_current_folder_rule(self):
-        for r in self.folder_rules:
-            if r.get("id") == self.active_rule_id:
+        rules = self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES)
+        active_id = self.cfg.get("active_rule_id", "standard_packaging_5stage")
+        for r in rules:
+            if r.get("id") == active_id:
                 return r
-        return self.folder_rules[0] if self.folder_rules else DEFAULT_FOLDER_RULES[0]
+        return rules[0] if rules else DEFAULT_FOLDER_RULES[0]
 
-    def load_app_icon(self):
-        if os.path.exists(APP_ICON_ICO):
+    def sync_single_thumbnail(self, proj_path, sku, thumb_path):
+        ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+        ok, msg = update_thumbnail_to_excel(ex_path, proj_path, sku, thumb_path)
+        return {"success": ok, "msg": msg}
+
+    def sync_all_thumbnails(self):
+        ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+        ok, msg = batch_sync_all_thumbnails_to_excel(ex_path, self.merged_projects)
+        return {"success": ok, "msg": msg}
+
+    def save_settings(self, new_cfg):
+        self.cfg.update(new_cfg)
+        save_config(self.cfg)
+        return {"success": True}
+
+    def change_project_category(self, proj_path, sku, new_cat):
+        if proj_path:
+            norm_p = proj_path.lower().replace("/", "\\")
+            if norm_p in self.meta_cache:
+                self.meta_cache[norm_p]["cat"] = new_cat
+            else:
+                self.meta_cache[norm_p] = {
+                    "brand": os.path.basename(os.path.dirname(proj_path)),
+                    "sku": sku,
+                    "cat": new_cat,
+                    "thumbnail": find_project_thumbnail(proj_path),
+                    "mtime": get_project_max_mtime(proj_path)
+                }
+            save_meta_cache(self.meta_cache)
+            
+        ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+        if ex_path and os.path.exists(ex_path):
             try:
-                self.root.iconbitmap(APP_ICON_ICO)
+                wb = openpyxl.load_workbook(ex_path)
+                sheet = wb.active
+                cat_col = None
+                sku_col = 2
+                for col_idx, cell in enumerate(sheet[1], start=1):
+                    val = str(cell.value or "").strip()
+                    if val in ("业务形态", "分类", "类别"):
+                        cat_col = col_idx
+                    if val in ("产品名称", "SKU", "品名"):
+                        sku_col = col_idx
+                if cat_col:
+                    sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower()) if sku else ""
+                    for r in range(2, sheet.max_row + 1):
+                        cell_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+                        cell_clean = re.sub(r'[\s_\-\(\)（）]+', '', cell_val.lower())
+                        if sku_clean and cell_clean and (sku_clean == cell_clean or sku_clean in cell_clean or cell_clean in sku_clean):
+                            sheet.cell(row=r, column=cat_col, value=new_cat)
+                            break
+                    wb.save(ex_path)
+                wb.close()
             except Exception:
                 pass
-        if os.path.exists(APP_ICON_PNG):
-            try:
-                img = Image.open(APP_ICON_PNG)
-                photo = ImageTk.PhotoImage(img)
-                self.root.iconphoto(True, photo)
-                self._app_icon_ref = photo
-            except Exception:
-                pass
+        return {"success": True, "msg": f"已将 [{sku}] 形态更新为【{new_cat}】"}
 
-    def setup_styles(self):
-        c = self.colors
-        self.root.configure(bg=c["bg"])
-        
-        style = ttk.Style()
-        try:
-            style.theme_use('clam')
-        except Exception:
-            pass
-            
-        style.configure(".", background=c["bg"], foreground=c["fg"], font=("Microsoft YaHei", 9))
-        style.configure("TNotebook", background=c["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 10), padding=[20, 7], borderwidth=0)
-        style.map("TNotebook.Tab",
-                  background=[("selected", c["primary"])],
-                  foreground=[("selected", c["primary_fg"])])
-                  
-        style.configure("TFrame", background=c["bg"])
-        style.configure("TLabelframe", background=c["bg"], foreground=c["fg"], bordercolor=c["card_border"])
-        style.configure("TLabelframe.Label", background=c["bg"], foreground=c["primary_hover"], font=("Microsoft YaHei", 9, "bold"))
-        
-        style.configure("TLabel", background=c["bg"], foreground=c["fg"])
-        
-        style.configure("TButton", background=c["btn_secondary_bg"], foreground=c["btn_secondary_fg"], font=("Microsoft YaHei", 9), padding=[8, 4], borderwidth=0)
-        style.map("TButton",
-                  background=[("active", c["primary"]), ("pressed", c["primary"])],
-                  foreground=[("active", "#FFFFFF"), ("pressed", "#FFFFFF")])
-                  
-        style.configure("Primary.TButton", background=c["primary"], foreground="#FFFFFF", font=("Microsoft YaHei", 9, "bold"), padding=[10, 5], borderwidth=0)
-        style.map("Primary.TButton", background=[("active", c["primary_hover"])])
-        
-        style.configure("TEntry", fieldbackground=c["input_bg"], foreground=c["input_fg"], insertcolor=c["fg"], bordercolor=c["card_border"])
-        style.configure("TCombobox", fieldbackground=c["input_bg"], background=c["btn_secondary_bg"], foreground=c["input_fg"], bordercolor=c["card_border"], arrowcolor=c["fg_muted"])
-        style.map("TCombobox", fieldbackground=[("readonly", c["input_bg"])], foreground=[("readonly", c["input_fg"])])
+    def pick_excel_file(self):
+        if not self.window:
+            return None
+        res = self.window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=('Excel Files (*.xlsx;*.xls)', 'All files (*.*)'))
+        if res and len(res) > 0:
+            selected = res[0]
+            self.cfg["excel_path"] = selected
+            save_config(self.cfg)
+            return selected
+        return None
 
-        style.configure("Treeview", background=c["panel_bg"], foreground=c["fg"], fieldbackground=c["panel_bg"], rowheight=26, font=("Microsoft YaHei", 9), borderwidth=0)
-        style.configure("Treeview.Heading", background=c["header_bg"], foreground=c["fg_muted"], font=("Microsoft YaHei", 9, "bold"), borderwidth=1, relief=tk.FLAT)
-        style.map("Treeview", background=[("selected", c["primary"])], foreground=[("selected", "#FFFFFF")])
+    def pick_workspace_dir(self):
+        if not self.window:
+            return None
+        res = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        if res and len(res) > 0:
+            selected = res[0]
+            ws = self.cfg.get("workspaces", [])
+            if selected not in ws:
+                ws.append(selected)
+            self.cfg["workspaces"] = ws
+            self.cfg["current_workspace"] = selected
+            save_config(self.cfg)
+            return {"selected": selected, "workspaces": ws}
+        return None
 
-    def toggle_theme(self):
-        new_theme = "light" if self.current_theme == "dark" else "dark"
-        self.current_theme = new_theme
-        self.cfg["theme"] = new_theme
-        self.colors = THEMES[new_theme]
-        save_config(self.cfg)
-        
-        self.setup_styles()
-        self.theme_btn.config(text="☀️ 浅色模式" if new_theme == "dark" else "🌙 护眼暗灰")
-        self.restyle_all_ui()
-        self.thumb_tk_cache.clear()
-        self.render_cards()
+    def pick_source_files(self):
+        if not self.window:
+            return []
+        res = self.window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=True, file_types=('Design Files (*.ai;*.psd;*.pdf;*.zip;*.rar)', 'All files (*.*)'))
+        return list(res) if res else []
 
-    def restyle_all_ui(self):
-        c = self.colors
-        self.root.configure(bg=c["bg"])
-        self.canvas.configure(bg=c["canvas_bg"])
-        self.grid_container.configure(bg=c["canvas_bg"])
-        self.category_listbox.configure(bg=c["panel_bg"], fg=c["fg"], selectbackground=c["primary"])
-        self.sync_status_lbl.configure(bg=c["status_bg"], fg=c["status_fg"])
-        
-        for slot in self.card_slots:
-            slot["card"].configure(bg=c["card_bg"], highlightbackground=c["card_border"])
-            slot["img_lbl"].configure(bg=c["thumb_bg"])
-            slot["meta_frame"].configure(bg=c["card_bg"])
-            slot["badge_row"].configure(bg=c["card_bg"])
-            slot["title_lbl"].configure(bg=c["card_bg"], fg=c["fg"])
-            slot["action_frame"].configure(bg=c["card_bg"])
-            slot["btn_open"].configure(bg=c["btn_secondary_bg"], fg=c["btn_secondary_fg"])
-            slot["btn_blend"].configure(bg=c["primary"])
-
-    def build_ui(self):
-        c = self.colors
-        
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # Tab 1: 视觉资产看板
-        self.tab_assets = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_assets, text="  🖼️ 视觉资产看板  ")
-        self.build_asset_hub_ui(self.tab_assets)
-        
-        # Tab 2: 设计源文件分拣与开工
-        self.tab_organizer = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_organizer, text="  📥 设计源文件分拣与开工  ")
-        self.build_organizer_ui(self.tab_organizer)
-
-    # ---------------- 页面 1: 视觉资产看板 ----------------
-    def build_asset_hub_ui(self, parent):
-        c = self.colors
-        
-        top_bar = ttk.Frame(parent, padding=(16, 10))
-        top_bar.pack(fill=tk.X)
-        
-        ttk.Label(top_bar, text="📊 视图:").pack(side=tk.LEFT, padx=(0, 4))
-        self.combo_source = ttk.Combobox(
-            top_bar,
-            textvariable=self.view_mode_var,
-            values=["merged", "excel", "disk"],
-            state="readonly",
-            width=22,
-            font=("Microsoft YaHei", 9)
-        )
-        self.combo_source.pack(side=tk.LEFT, padx=(0, 14))
-        self.combo_source.bind("<<ComboboxSelected>>", self.on_source_change)
-        
-        ttk.Label(top_bar, text="🔍 搜索:").pack(side=tk.LEFT, padx=(0, 4))
-        search_entry = ttk.Entry(top_bar, textvariable=self.search_var, font=("Microsoft YaHei", 9), width=18)
-        search_entry.pack(side=tk.LEFT, padx=(0, 12))
-        self.search_var.trace_add("write", lambda *args: self.on_search_change_debounced())
-        
-        ttk.Button(top_bar, text="📊 绑定 Excel...", command=self.import_new_excel).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(top_bar, text="📤 同步缩略图到 Excel", command=self.sync_all_thumbnails_to_excel).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(top_bar, text="🔄 刷新", command=self.load_all_asset_data).pack(side=tk.LEFT, padx=(0, 6))
-        
-        self.sync_status_lbl = tk.Label(
-            top_bar,
-            text="🟢 极速同步已就绪",
-            font=("Microsoft YaHei", 8, "bold"),
-            fg=c["status_fg"],
-            bg=c["status_bg"],
-            padx=8,
-            pady=3
-        )
-        self.sync_status_lbl.pack(side=tk.LEFT, padx=(6, 0))
-        
-        self.theme_btn = ttk.Button(top_bar, text="☀️ 浅色模式" if self.current_theme == "dark" else "🌙 护眼暗灰", command=self.toggle_theme)
-        self.theme_btn.pack(side=tk.RIGHT, padx=(8, 0))
-        
-        ttk.Button(top_bar, text="🌐 导出全景画廊 (HTML)", command=self.export_html_gallery).pack(side=tk.RIGHT)
-
-        # 底栏分页
-        self.bottom_bar = ttk.Frame(parent, padding=(16, 8))
-        self.bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.page_info_lbl = ttk.Label(self.bottom_bar, text="", font=("Microsoft YaHei", 9))
-        self.page_info_lbl.pack(side=tk.LEFT)
-        
-        self.btn_next = ttk.Button(self.bottom_bar, text="下一页 ➡️", command=self.next_page)
-        self.btn_next.pack(side=tk.RIGHT, padx=(6, 0))
-        
-        self.btn_prev = ttk.Button(self.bottom_bar, text="⬅️ 上一页", command=self.prev_page)
-        self.btn_prev.pack(side=tk.RIGHT)
-
-        # 主视口
-        main_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
-        
-        left_frame = ttk.LabelFrame(main_pane, text=" 🏷️ 形态分类 & 筛选 ", padding=8, width=200)
-        main_pane.add(left_frame, weight=1)
-        
-        self.category_listbox = tk.Listbox(
-            left_frame,
-            font=("Microsoft YaHei", 10),
-            selectmode=tk.SINGLE,
-            relief=tk.FLAT,
-            bg=c["panel_bg"],
-            fg=c["fg"],
-            selectbackground=c["primary"],
-            selectforeground="white",
-            highlightthickness=0,
-            activestyle="none"
-        )
-        self.category_listbox.pack(fill=tk.BOTH, expand=True)
-        self.category_listbox.bind("<<ListboxSelect>>", self.on_category_select)
-        
-        right_frame = ttk.Frame(main_pane)
-        main_pane.add(right_frame, weight=5)
-        
-        self.canvas = tk.Canvas(right_frame, bg=c["canvas_bg"], highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-        
-        self.grid_container = tk.Frame(self.canvas, bg=c["canvas_bg"])
-        self.grid_container.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.grid_container, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.canvas.bind("<Configure>", self.on_canvas_configure)
-        self.canvas.bind_all("<MouseWheel>", self.on_mouse_wheel)
-
-    # ---------------- 卡片槽位复用池 (Widget Pool) ----------------
-    def init_card_slots(self, count=48):
-        c = self.colors
-        for i in range(count):
-            card = tk.Frame(
-                self.grid_container,
-                bg=c["card_bg"],
-                bd=0,
-                padx=8,
-                pady=8,
-                highlightthickness=1,
-                highlightbackground=c["card_border"]
-            )
-            
-            img_lbl = tk.Label(card, bg=c["thumb_bg"], cursor="hand2")
-            img_lbl.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-            
-            meta_frame = tk.Frame(card, bg=c["card_bg"], pady=4)
-            meta_frame.pack(fill=tk.X)
-            
-            badge_row = tk.Frame(meta_frame, bg=c["card_bg"])
-            badge_row.pack(fill=tk.X, pady=(0, 2))
-            
-            cat_tag = tk.Label(badge_row, text="包装", font=("Microsoft YaHei", 8, "bold"), padx=5, pady=1)
-            cat_tag.pack(side=tk.LEFT, padx=(0, 4))
-            
-            brand_tag = tk.Label(badge_row, text="", font=("Microsoft YaHei", 8), padx=4, pady=1)
-            brand_tag.pack(side=tk.LEFT)
-            
-            title_lbl = tk.Label(meta_frame, text="", font=("Microsoft YaHei", 9, "bold"), bg=c["card_bg"], fg=c["fg"], wraplength=180, justify="left")
-            title_lbl.pack(anchor="w")
-            
-            action_frame = tk.Frame(card, bg=c["card_bg"], pady=4)
-            action_frame.pack(fill=tk.X)
-            
-            btn_open = tk.Button(action_frame, text="📁 文件夹", font=("Microsoft YaHei", 8), bg=c["btn_secondary_bg"], fg=c["btn_secondary_fg"], relief=tk.FLAT, bd=0)
-            btn_open.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-            
-            btn_blend = tk.Button(action_frame, text="🚀 3D工程", font=("Microsoft YaHei", 8, "bold"), bg=c["primary"], fg="#FFFFFF", relief=tk.FLAT, bd=0)
-            btn_blend.pack(side=tk.RIGHT)
-            
-            slot = {
-                "card": card,
-                "img_lbl": img_lbl,
-                "meta_frame": meta_frame,
-                "badge_row": badge_row,
-                "cat_tag": cat_tag,
-                "brand_tag": brand_tag,
-                "title_lbl": title_lbl,
-                "action_frame": action_frame,
-                "btn_open": btn_open,
-                "btn_blend": btn_blend,
-                "active_proj": None
-            }
-            self.card_slots.append(slot)
-            
-            # 单次绑定事件
-            btn_open.config(command=lambda s=slot: self.open_folder(s["active_proj"].get("path") if s["active_proj"] else None))
-            btn_blend.config(command=lambda s=slot: self.launch_blend(s["active_proj"].get("path") if s["active_proj"] else None))
-            for w in (card, img_lbl, title_lbl, meta_frame):
-                w.bind("<Button-1>", lambda e, s=slot: self.open_folder(s["active_proj"].get("path") if s["active_proj"] else None))
-                w.bind("<Double-1>", lambda e, s=slot: self.launch_blend(s["active_proj"].get("path") if s["active_proj"] else None))
-                w.bind("<Button-3>", lambda e, s=slot: self.show_context_menu(e, s["active_proj"]) if s["active_proj"] else None)
-
-    # ---------------- 页面 2: 设计源文件分拣与开工 ----------------
-    def build_organizer_ui(self, parent):
-        c = self.colors
-        
-        top_frame = ttk.LabelFrame(parent, text=" 📂 工作盘、客户、分类与归档文件夹规则 ", padding=10)
-        top_frame.pack(fill=tk.X, padx=16, pady=8)
-        
-        # 行 1: 主工作盘
-        row_dir = ttk.Frame(top_frame)
-        row_dir.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(row_dir, text="主工作盘:").pack(side=tk.LEFT, padx=(0, 6))
-        self.ws_combo_org = ttk.Combobox(
-            row_dir,
-            textvariable=self.current_workspace_var,
-            values=self.workspaces,
-            state="readonly",
-            width=36,
-            font=("Microsoft YaHei", 9)
-        )
-        self.ws_combo_org.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        ttk.Button(row_dir, text="➕ 绑定新工作盘...", command=self.add_workspace).pack(side=tk.LEFT)
-        
-        # 行 2: 客户、形态与【自定义文件夹规则】
-        row_brand = ttk.Frame(top_frame)
-        row_brand.pack(fill=tk.X)
-        ttk.Label(row_brand, text="指定客户:").pack(side=tk.LEFT, padx=(0, 6))
-        self.brand_combo_org = ttk.Combobox(
-            row_brand,
-            textvariable=self.current_brand_var,
-            values=self.curated_brands,
-            state="readonly",
-            width=14,
-            font=("Microsoft YaHei", 9)
-        )
-        self.brand_combo_org.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(row_brand, text="➕", width=3, command=self.add_brand).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Label(row_brand, text="🏷️ 业务形态:").pack(side=tk.LEFT, padx=(4, 4))
-        self.cat_combo_org = ttk.Combobox(
-            row_brand,
-            textvariable=self.current_cat_var,
-            values=VALID_CATEGORIES,
-            state="readonly",
-            width=8,
-            font=("Microsoft YaHei", 9)
-        )
-        self.cat_combo_org.pack(side=tk.LEFT, padx=(0, 10))
-        self.cat_combo_org.bind("<<ComboboxSelected>>", lambda e: self.save_cfg_all())
-
-        # 🌟 自定义文件夹规则选择器与管理入口
-        ttk.Label(row_brand, text="📁 归档规则:").pack(side=tk.LEFT, padx=(4, 4))
-        self.combo_rule = ttk.Combobox(
-            row_brand,
-            textvariable=self.active_rule_name_var,
-            values=[r["name"] for r in self.folder_rules],
-            state="readonly",
-            width=24,
-            font=("Microsoft YaHei", 9)
-        )
-        self.combo_rule.pack(side=tk.LEFT, padx=(0, 6))
-        self.combo_rule.bind("<<ComboboxSelected>>", self.on_rule_combo_selected)
-        
-        ttk.Button(row_brand, text="⚙️ 自定义规则...", command=self.open_rule_manager).pack(side=tk.LEFT)
-
-        # 2. 自动化存盘与同步选项
-        b_frame = ttk.LabelFrame(parent, text=" ⚡ 自动化与开工设置 ", padding=8)
-        b_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
-        row_b = ttk.Frame(b_frame)
-        row_b.pack(fill=tk.X)
-        ttk.Checkbutton(row_b, text="🎨 自动打开 AI 设计原稿", variable=self.auto_open_ai_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(row_b, text="✨ 自动生成对应 .blend 工程", variable=self.auto_create_blend_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(row_b, text="🚀 自动启动 Blender", variable=self.auto_open_blender_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Checkbutton(row_b, text="📊 自动录入 Excel", variable=self.auto_append_excel_var, command=self.save_cfg_all).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(row_b, text="🎨 一键安装 AI 贴图脚本", command=self.install_ai_jsx_script).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(row_b, text="📁 设置母版 .blend...", command=self.set_custom_template).pack(side=tk.RIGHT)
-
-        # 3. 待处理列表
-        list_frame = ttk.LabelFrame(parent, text=" 📋 待处理的设计源文件 (按当前规则自动映射路径，双击可自由微调) ", padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
-        
-        cols = ("file", "brand", "sku", "cat", "target_dir", "status")
-        self.tree_org = ttk.Treeview(list_frame, columns=cols, show="headings", selectmode="extended")
-        self.tree_org.heading("file", text="待归档文件名")
-        self.tree_org.heading("brand", text="归属客户")
-        self.tree_org.heading("sku", text="核心SKU名")
-        self.tree_org.heading("cat", text="业务分类")
-        self.tree_org.heading("target_dir", text="目标归档目录")
-        self.tree_org.heading("status", text="状态")
-        
-        self.tree_org.column("file", width=210, anchor="w")
-        self.tree_org.column("brand", width=100, anchor="center")
-        self.tree_org.column("sku", width=160, anchor="w")
-        self.tree_org.column("cat", width=90, anchor="center")
-        self.tree_org.column("target_dir", width=200, anchor="w")
-        self.tree_org.column("status", width=80, anchor="center")
-        
-        scroll_org = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.tree_org.yview)
-        self.tree_org.configure(yscrollcommand=scroll_org.set)
-        self.tree_org.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_org.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree_org.bind("<Double-1>", self.on_org_double_click)
-
-        # 4. 操作按钮行
-        btn_frame = ttk.Frame(parent, padding=2)
-        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
-        ttk.Button(btn_frame, text="➕ 添加 AI / 设计文件...", command=self.browse_files_for_org).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="✏️ 批量应用当前客户与分类", command=self.apply_current_brand_and_cat_to_all_org).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="❌ 移除选中", command=self.remove_selected_org).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="🧹 清空", command=self.clear_org).pack(side=tk.LEFT)
-
-        # 5. 底部执行大按钮
-        exec_frame = ttk.Frame(parent, padding=6)
-        exec_frame.pack(fill=tk.X, padx=16, pady=(0, 10))
-        btn_exec = tk.Button(
-            exec_frame,
-            text="🚀 【 按当前文件夹规则一键创建项目、同步写入 Excel 并自动开工 】",
-            font=("Microsoft YaHei", 11, "bold"),
-            bg=c["primary"],
-            fg="#FFFFFF",
-            activebackground=c["primary_hover"],
-            activeforeground="#FFFFFF",
-            relief=tk.FLAT,
-            height=2,
-            bd=0,
-            command=self.execute_organize_flow
-        )
-        btn_exec.pack(fill=tk.X)
-
-    # ---------------- 规则联动与管理 ----------------
-    def on_rule_combo_selected(self, event=None):
-        name = self.active_rule_name_var.get()
-        for r in self.folder_rules:
-            if r.get("name") == name:
-                self.active_rule_id = r.get("id")
-                break
-        self.save_cfg_all()
-        self.refresh_organizer_table()
-
-    def open_rule_manager(self):
-        FolderRuleManagerDialog(
-            parent=self.root,
-            rules=self.folder_rules,
-            active_rule_id=self.active_rule_id,
-            on_save_callback=self.on_rules_updated,
-            colors=self.colors
-        )
-
-    def on_rules_updated(self, new_rules, new_active_id):
-        self.folder_rules = new_rules
-        self.active_rule_id = new_active_id
-        self.cfg["folder_rules"] = self.folder_rules
-        self.cfg["active_rule_id"] = self.active_rule_id
-        save_config(self.cfg)
-        
-        self.combo_rule["values"] = [r["name"] for r in self.folder_rules]
-        self.update_active_rule_name_var()
-        self.refresh_organizer_table()
-        messagebox.showinfo("规则已更新", f"已成功切换并应用规则:\n【{self.active_rule_name_var.get()}】")
-
-    def compute_target_relative_dir(self, brand, sku, cat):
-        rule = self.get_current_folder_rule()
-        pat = rule.get("path_pattern", "{brand}/{sku}")
-        if "{category}" in pat:
-            rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
-        elif "{brand}" in pat:
-            rel = f"{brand}/{sku}" if brand else sku
-        else:
-            rel = sku
-        return rel
-
-    # ---------------- 逻辑与事件处理 ----------------
     def install_ai_jsx_script(self):
         src_jsx = os.path.join(os.path.dirname(__file__), "Export_Artboards_To_Textures.jsx")
         if not os.path.exists(src_jsx):
             src_jsx = r"C:\Users\qq424\Packaging_Tools\Export_Artboards_To_Textures.jsx"
-            
         if not os.path.exists(src_jsx):
-            messagebox.showerror("错误", "未找到脚本源文件: Export_Artboards_To_Textures.jsx")
-            return
+            return {"success": False, "msg": "未找到脚本源文件: Export_Artboards_To_Textures.jsx"}
             
         target_dirs = []
         possible_roots = [
@@ -1780,785 +931,1401 @@ class PackagingStudioSuite:
                 pass
                 
         if installed:
-            messagebox.showinfo("安装成功", f"🎉 已成功将贴图导出脚本注入 Illustrator！\n\n已安装到:\n{installed[0]}\n\n使用方式:\n在 Illustrator 中点击顶部菜单：\n【文件】➔【脚本】➔【🚀一键导出画板到贴图目录】即可一键秒出图！")
-        else:
-            # 如果自动寻找路径失败，让用户手动选择
-            dest_dir = filedialog.askdirectory(title="选择 Illustrator 的 Presets/zh_CN/脚本 目录")
-            if dest_dir:
-                try:
-                    shutil.copy2(src_jsx, os.path.join(dest_dir, "🚀一键导出画板到贴图目录.jsx"))
-                    messagebox.showinfo("安装成功", "🎉 已成功安装到指定的脚本目录！")
-                except Exception as e:
-                    messagebox.showerror("安装失败", str(e))
+            return {"success": True, "msg": f"🎉 已成功将贴图导出脚本注入 Illustrator！\n已安装到: {installed[0]}"}
+        return {"success": False, "msg": "未在默认路径检测到 Illustrator 脚本目录，请手动放置。"}
 
-    def save_cfg_all(self):
-        self.cfg["current_workspace"] = self.current_workspace_var.get()
-        self.cfg["current_brand"] = self.current_brand_var.get()
-        self.cfg["default_category"] = self.current_cat_var.get()
-        self.cfg["auto_create_blend"] = self.auto_create_blend_var.get()
-        self.cfg["auto_open_blender"] = self.auto_open_blender_var.get()
-        self.cfg["auto_open_ai"] = self.auto_open_ai_var.get()
-        self.cfg["auto_append_to_excel"] = self.auto_append_excel_var.get()
-        self.cfg["folder_rules"] = self.folder_rules
-        self.cfg["active_rule_id"] = self.active_rule_id
-        save_config(self.cfg)
-
-    def add_workspace(self):
-        d = filedialog.askdirectory(title="选择需要绑定的新工作盘/根目录")
-        if d:
-            norm_d = os.path.normpath(d)
-            if norm_d not in self.workspaces:
-                self.workspaces.insert(0, norm_d)
-                self.cfg["workspaces"] = self.workspaces
-            self.cfg["current_workspace"] = norm_d
-            self.current_workspace_var.set(norm_d)
-            save_config(self.cfg)
-            self.ws_combo_org["values"] = self.workspaces
-            self.load_all_asset_data()
-
-    def add_brand(self):
-        name = simpledialog.askstring("添加新客户", "请输入客户/品牌名称 (如：统一、农夫山泉):", parent=self.root)
-        if name and name.strip():
-            name = name.strip()
-            if name not in self.curated_brands:
-                self.curated_brands.insert(0, name)
-                self.cfg["curated_brands"] = self.curated_brands
-                self.cfg["current_brand"] = name
-                save_config(self.cfg)
-                self.current_brand_var.set(name)
-                self.brand_combo_org["values"] = self.curated_brands
-                cur_ws = self.current_workspace_var.get().strip()
-                if cur_ws and os.path.exists(cur_ws):
-                    os.makedirs(os.path.join(cur_ws, name), exist_ok=True)
-
-    def set_custom_template(self):
-        f = filedialog.askopenfilename(title="选择你的默认包装 Blender 母版工程 (.blend)", filetypes=[("Blender 工程", "*.blend"), ("所有文件", "*.*")])
-        if f:
-            self.cfg["template_blend_path"] = f
-            save_config(self.cfg)
-            messagebox.showinfo("设置成功", f"已设为默认母版:\n{os.path.basename(f)}")
-
-    def add_files_to_organizer(self, filepaths):
-        cur_brand = self.current_brand_var.get().strip()
-        for fp in filepaths:
-            fp = os.path.abspath(fp)
-            if not os.path.exists(fp) or not os.path.isfile(fp):
-                continue
-            if any(item['filepath'] == fp for item in self.files_to_organize):
-                continue
-            brand, sku, is_junk = clean_and_parse_filename(fp, fallback_brand=cur_brand, valid_brands=self.curated_brands)
-            detected_cat = auto_detect_category_from_name(os.path.basename(fp))
-            item = {
-                "filepath": fp,
-                "filename": os.path.basename(fp),
-                "brand": brand,
-                "sku": sku,
-                "cat": detected_cat,
-                "is_junk": is_junk,
-                "md5": get_file_md5(fp)
-            }
-            self.files_to_organize.append(item)
-        self.refresh_organizer_table()
-
-    def refresh_organizer_table(self):
-        self.tree_org.delete(*self.tree_org.get_children())
-        for item in self.files_to_organize:
-            brand = item["brand"]
-            sku = item["sku"]
-            cat = item.get("cat", "包装")
-            target_rel = self.compute_target_relative_dir(brand, sku, cat)
-            status = "⚠️需确认" if item["is_junk"] else "✅就绪"
-            self.tree_org.insert("", tk.END, values=(item["filename"], brand, sku, cat, target_rel, status))
-
-    def browse_files_for_org(self):
-        files = filedialog.askopenfilenames(title="选择设计源文件", filetypes=[("包装设计文件", "*.ai;*.pdf;*.psd;*.zip;*.rar;*.eps"), ("所有文件", "*.*")])
-        if files:
-            self.add_files_to_organizer(files)
-
-    def apply_current_brand_and_cat_to_all_org(self):
-        cur_brand = self.current_brand_var.get().strip()
-        cur_cat = self.current_cat_var.get().strip()
-        for item in self.files_to_organize:
-            if cur_brand:
-                item["brand"] = cur_brand
-            if cur_cat:
-                item["cat"] = cur_cat
-        self.refresh_organizer_table()
-
-    def remove_selected_org(self):
-        selected = self.tree_org.selection()
-        for s in reversed(selected):
-            idx = self.tree_org.index(s)
-            self.tree_org.delete(s)
-            del self.files_to_organize[idx]
-
-    def clear_org(self):
-        self.tree_org.delete(*self.tree_org.get_children())
-        self.files_to_organize.clear()
-
-    def on_org_double_click(self, event):
-        item_id = self.tree_org.focus()
-        if not item_id:
-            return
-        idx = self.tree_org.index(item_id)
-        cur_item = self.files_to_organize[idx]
+    def execute_organize(self, data):
+        ws_root = self.cfg.get("current_workspace", DEFAULT_WORKSPACES[0])
+        brand = data.get("brand", "通用")
+        cat = data.get("cat", "包装")
+        files = data.get("files", [])
+        auto_ai = data.get("auto_open_ai", True)
+        auto_blend = data.get("auto_create_blend", True)
+        auto_open_bl = data.get("auto_open_blender", True)
+        auto_excel = data.get("auto_append_excel", True)
         
-        edit_win = tk.Toplevel(self.root)
-        edit_win.title("✏️ 快速修改客户、分类与项目名")
-        edit_win.geometry("430x290")
-        edit_win.configure(bg=self.colors["bg"])
-        edit_win.transient(self.root)
-        edit_win.grab_set()
-        
-        ttk.Label(edit_win, text=f"原始文件: {cur_item['filename']}", wraplength=390).pack(padx=15, pady=10, anchor="w")
-        b_var = tk.StringVar(value=cur_item["brand"])
-        s_var = tk.StringVar(value=cur_item["sku"])
-        c_var = tk.StringVar(value=cur_item.get("cat", "包装"))
-        
-        f_in = ttk.Frame(edit_win)
-        f_in.pack(fill=tk.X, padx=15, pady=5)
-        ttk.Label(f_in, text="归属客户:").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Combobox(f_in, textvariable=b_var, values=self.curated_brands, width=24).grid(row=0, column=1, sticky="w", pady=4)
-        
-        ttk.Label(f_in, text="业务分类:").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Combobox(f_in, textvariable=c_var, values=VALID_CATEGORIES, width=24).grid(row=1, column=1, sticky="w", pady=4)
-        
-        ttk.Label(f_in, text="核心SKU名:").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(f_in, textvariable=s_var, width=26).grid(row=2, column=1, sticky="w", pady=4)
-        
-        def save_edit():
-            cur_item["brand"] = b_var.get().strip()
-            cur_item["sku"] = s_var.get().strip()
-            cur_item["cat"] = normalize_category(c_var.get().strip())
-            cur_item["is_junk"] = False
-            self.refresh_organizer_table()
-            edit_win.destroy()
+        if not files:
+            return {"success": False, "msg": "请先添加待分拣的设计源文件！"}
             
-        ttk.Button(edit_win, text="保存修改 (Enter)", style="Primary.TButton", command=save_edit).pack(pady=12)
-        edit_win.bind("<Return>", lambda e: save_edit())
-
-    def execute_organize_flow(self):
-        if not self.files_to_organize:
-            messagebox.showwarning("提示", "请先添加需要归档的设计源文件！")
-            return
-            
-        root_dir = self.current_workspace_var.get().strip()
-        if not root_dir or not os.path.exists(root_dir):
-            try:
-                os.makedirs(root_dir, exist_ok=True)
-            except Exception as e:
-                messagebox.showerror("错误", f"无法创建主工作盘: {root_dir}\n{e}")
-                return
-                
-        self.save_cfg_all()
         rule = self.get_current_folder_rule()
-        subfolders = rule.get("subfolders", ["01_Design_平面原稿", "02_Textures_贴图资产", "03_3D_三维工程", "04_Renders_通道输出", "05_Delivery_最终交付"])
-        design_sub = rule.get("design_sub", subfolders[0] if subfolders else "")
-        blend_sub = rule.get("blend_sub", subfolders[2] if len(subfolders) > 2 else (subfolders[0] if subfolders else ""))
+        subfolders = rule.get("subfolders", DEFAULT_FOLDER_RULES[0]["subfolders"])
+        pat = rule.get("path_pattern", "{brand}/{sku}")
+        design_sub = rule.get("design_sub", "01_Design_平面原稿")
+        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
         
-        template_blend = get_valid_template_blend(self.cfg)
-        if not template_blend and os.path.exists(BLENDER_EXE):
-            tpl_dir = r"C:\Users\qq424\Packaging_Tools\templates"
-            os.makedirs(tpl_dir, exist_ok=True)
-            auto_tpl = os.path.join(tpl_dir, "Packaging_Master_Template.blend")
-            if safe_create_blend_from_blender(BLENDER_EXE, auto_tpl):
-                template_blend = auto_tpl
-            
-        auto_create_blend = self.auto_create_blend_var.get()
-        auto_open_blender = self.auto_open_blender_var.get()
-        auto_open_ai = self.auto_open_ai_var.get()
-        auto_append_excel = self.auto_append_excel_var.get()
-        excel_path = self.excel_path_var.get().strip()
+        created_count = 0
+        opened_blend = None
+        opened_ai = None
         
-        success_count = 0
-        duplicate_count = 0
-        excel_appended_count = 0
-        excel_lock_warnings = []
-        last_new_blend = "" # 仅记录全新首次创建的 Blender 工程
-        last_ai = ""
-        last_proj = ""
-        
-        for item in self.files_to_organize:
-            brand = item["brand"].strip()
-            sku = item["sku"].strip() if item["sku"].strip() else os.path.splitext(item["filename"])[0]
-            cat = normalize_category(item.get("cat", "包装"))
+        for fpath in files:
+            if not os.path.exists(fpath):
+                continue
+            fname = os.path.basename(fpath)
+            sku = os.path.splitext(fname)[0]
             
-            target_rel = self.compute_target_relative_dir(brand, sku, cat)
-            proj_dir = os.path.join(root_dir, target_rel.replace("/", "\\"))
-            
-            # 按照用户规则创建所有子文件夹
+            if "{category}" in pat:
+                rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
+            elif "{brand}" in pat:
+                rel = f"{brand}/{sku}" if brand else sku
+            else:
+                rel = sku
+                
+            proj_dir = os.path.join(ws_root, rel)
+            os.makedirs(proj_dir, exist_ok=True)
             for sub in subfolders:
                 os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
                 
-            design_dir = os.path.join(proj_dir, design_sub) if design_sub else proj_dir
-            os.makedirs(design_dir, exist_ok=True)
-            
-            ext = os.path.splitext(item["filename"])[1]
-            existing_files = os.listdir(design_dir) if os.path.exists(design_dir) else []
-            is_dup = False
-            if item.get("md5"):
-                for ef in existing_files:
-                    if get_file_md5(os.path.join(design_dir, ef)) == item["md5"]:
-                        is_dup = True
-                        break
-            if is_dup:
-                duplicate_count += 1
-                last_proj = proj_dir
-                continue
-                
-            dest_name = f"{sku}_v{len(existing_files)+1:02d}{ext}"
-            dest_full_ai = os.path.join(design_dir, dest_name)
+            dest_fpath = os.path.join(proj_dir, design_sub, fname)
             try:
-                shutil.copy2(item["filepath"], dest_full_ai)
-                success_count += 1
-                last_proj = proj_dir
-                if ext.lower() in [".ai", ".psd", ".pdf", ".eps"]:
-                    last_ai = dest_full_ai
-            except Exception as e:
-                print(f"Error copying: {e}")
-                
-            if auto_create_blend and blend_sub:
-                target_blend_dir = os.path.join(proj_dir, blend_sub)
-                os.makedirs(target_blend_dir, exist_ok=True)
-                target_blend = os.path.join(target_blend_dir, f"{sku}.blend")
-                
-                # 仅当工程文件原先不存在时，才创建并标记为【首次开工】
-                if not os.path.exists(target_blend):
-                    if template_blend and os.path.exists(template_blend):
-                        try:
-                            shutil.copy2(template_blend, target_blend)
-                            last_new_blend = target_blend
-                        except Exception as e:
-                            print(f"Error copying template blend: {e}")
-                    elif os.path.exists(BLENDER_EXE):
-                        if safe_create_blend_from_blender(BLENDER_EXE, target_blend):
-                            last_new_blend = target_blend
-
-            if auto_append_excel and excel_path and os.path.exists(excel_path):
-                ok, emsg = append_project_to_excel(excel_path, brand, sku, cat, proj_dir)
-                if ok:
-                    excel_appended_count += 1
-                elif "WPS" in emsg or "占用" in emsg:
-                    if emsg not in excel_lock_warnings:
-                        excel_lock_warnings.append(emsg)
-
-        msg = []
-        if success_count > 0:
-            msg.append(f"✅ 成功按【{rule.get('name')}】创建并归档 {success_count} 个标准项目！")
-            if excel_appended_count > 0:
-                msg.append(f"📊 自动同步将 {excel_appended_count} 个新项目录入《产品列表.xlsx》！")
-        if duplicate_count > 0:
-            msg.append(f"ℹ️ 自动跳过 {duplicate_count} 个重复接收文件。")
-        if excel_lock_warnings:
-            msg.append("\n" + "\n".join(excel_lock_warnings))
-            
-        # 顺势拉起 AI 源文件
-        if auto_open_ai and last_ai and os.path.exists(last_ai):
-            try:
-                os.startfile(last_ai)
-                msg.append(f"🎨 已顺势打开 AI 设计原稿: [{os.path.basename(last_ai)}]")
-            except Exception as e:
-                print(f"Error opening AI: {e}")
-                
-        # 顺势启动 Blender (仅当是首次创建的新项目/新 Blend 工程时才打开；若归档现有工程的新版本，则不重复打开)
-        if auto_open_blender and last_new_blend and os.path.exists(last_new_blend):
-            try:
-                subprocess.Popen([BLENDER_EXE, last_new_blend])
-                msg.append(f"🚀 已自动启动 Blender 开工新工程: [{os.path.basename(last_new_blend)}]")
-            except Exception:
-                os.startfile(last_new_blend)
-        elif not auto_open_ai and last_proj and os.path.exists(last_proj):
-            try:
-                os.startfile(last_proj)
+                shutil.copy2(fpath, dest_fpath)
             except Exception:
                 pass
                 
-        messagebox.showinfo("🎉 处理完成", "\n".join(msg))
-        self.clear_org()
-        self.load_all_asset_data()
-
-    # ---------------- 资产看板数据与极速同步 ----------------
-    def start_excel_auto_sync_watcher(self):
-        ex_path = self.excel_path_var.get().strip()
-        cur_ws = self.current_workspace_var.get().strip()
-        needs_refresh = False
-        status_msg = ""
-        
-        # 1. 监测 Excel 台账变化
-        if ex_path and os.path.exists(ex_path):
-            try:
-                current_mtime = os.path.getmtime(ex_path)
-                if self.last_excel_mtime > 0 and current_mtime > self.last_excel_mtime:
-                    self.last_excel_mtime = current_mtime
-                    needs_refresh = True
-                    status_msg = "⚡ Excel 台账已更新，已自动同步！"
-                elif self.last_excel_mtime == 0:
-                    self.last_excel_mtime = current_mtime
-            except Exception:
-                pass
-                
-        # 2. 监测工作盘最新渲染文件变动 (秒级感知 Blender 新渲染出图)
-        if cur_ws and os.path.exists(cur_ws):
-            try:
-                cur_ws_mtime = os.path.getmtime(cur_ws)
-                if not hasattr(self, "last_ws_mtime") or self.last_ws_mtime == 0:
-                    self.last_ws_mtime = cur_ws_mtime
-                elif cur_ws_mtime > self.last_ws_mtime:
-                    self.last_ws_mtime = cur_ws_mtime
-                    needs_refresh = True
-                    if not status_msg:
-                        status_msg = "⚡ 检测到新渲染图生成，已实时更新封面！"
-            except Exception:
-                pass
-
-        if needs_refresh:
-            self.thumb_tk_cache.clear()
-            self.load_all_asset_data()
-            self.sync_status_lbl.config(text=status_msg if status_msg else "⚡ 资产库已实时刷新！", bg="#FEF3C7", fg="#B45309")
-            self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
-
-        self.root.after(2000, self.start_excel_auto_sync_watcher)
-
-    def _async_load_all_asset_data(self, ex_path, cur_ws):
-        excel_projs = parse_and_cache_excel(ex_path) if (ex_path and os.path.exists(ex_path)) else []
-        disk_projs = scan_workspace_projects_fast(cur_ws, self.meta_cache) if (cur_ws and os.path.exists(cur_ws)) else []
-        last_m = os.path.getmtime(ex_path) if (ex_path and os.path.exists(ex_path)) else 0
-        
-        self.root.after(0, self.on_background_data_ready, excel_projs, disk_projs, last_m)
-
-    def on_background_data_ready(self, excel_projs, disk_projs, last_m=0):
-        self.last_excel_mtime = last_m
-        self.excel_projects = excel_projs
-        self.disk_projects = disk_projs
-        self.merged_projects = merge_excel_and_disk_projects(self.excel_projects, self.disk_projects)
-        
-        self.combo_source["values"] = [
-            f"⚡ 智能融合视图 ({len(self.merged_projects)})",
-            f"仅 Excel 产品台账 ({len(self.excel_projects)})",
-            f"仅本地工作盘扫描 ({len(self.disk_projects)})"
-        ]
-        
-        mode = self.view_mode_var.get()
-        if mode == "excel":
-            self.combo_source.current(1)
-        elif mode == "disk":
-            self.combo_source.current(2)
-        else:
-            self.combo_source.current(0)
-            
-        self.update_active_dataset()
-        self.sync_status_lbl.config(text=f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)", bg=self.colors["status_bg"], fg=self.colors["status_fg"])
-
-    def load_all_asset_data(self):
-        ex_path = self.excel_path_var.get().strip()
-        cur_ws = self.current_workspace_var.get().strip()
-        self.sync_status_lbl.config(text="⚡ 正在后台极速加载台账与磁盘资产...", bg="#FEF3C7", fg="#B45309")
-        threading.Thread(target=self._async_load_all_asset_data, args=(ex_path, cur_ws), daemon=True).start()
-
-    def on_source_change(self, event=None):
-        sel_idx = self.combo_source.current()
-        if sel_idx == 1:
-            self.view_mode_var.set("excel")
-        elif sel_idx == 2:
-            self.view_mode_var.set("disk")
-        else:
-            self.view_mode_var.set("merged")
-        self.update_active_dataset()
-
-    def update_active_dataset(self):
-        mode = self.view_mode_var.get()
-        if mode == "excel":
-            self.current_display_list = self.excel_projects
-        elif mode == "disk":
-            self.current_display_list = self.disk_projects
-        else:
-            self.current_display_list = self.merged_projects
-            
-        cat_counts = {c: 0 for c in VALID_CATEGORIES}
-        for p in self.current_display_list:
-            c = normalize_category(p.get("cat", "包装"))
-            p["cat"] = c
-            cat_counts[c] = cat_counts.get(c, 0) + 1
-            
-        self.category_listbox.delete(0, tk.END)
-        self.category_listbox.insert(tk.END, f"✨ 全部形态 ({len(self.current_display_list)})")
-        
-        cat_icons = {"包装": "📦", "套盒": "🎁", "海报": "🖼️", "物料": "📑"}
-        for c in VALID_CATEGORIES:
-            icon = cat_icons.get(c, "🏷️")
-            self.category_listbox.insert(tk.END, f"{icon} {c} ({cat_counts.get(c, 0)})")
-            
-        self.category_listbox.select_set(0)
-        self.selected_category_var.set("全部")
-        self.current_page = 0
-        self.apply_filter()
-
-    def import_new_excel(self):
-        f = filedialog.askopenfilename(title="选择包装列表 Excel 表格 (.xlsx)", filetypes=[("Excel 表格", "*.xlsx"), ("所有文件", "*.*")])
-        if f:
-            self.excel_path_var.set(f)
-            self.cfg["excel_path"] = f
-            save_config(self.cfg)
-            self.load_all_asset_data()
-
-    def on_search_change_debounced(self):
-        if self.search_debounce_job:
-            self.root.after_cancel(self.search_debounce_job)
-        self.search_debounce_job = self.root.after(200, self.do_search_apply)
-
-    def do_search_apply(self):
-        self.current_page = 0
-        self.apply_filter()
-
-    def on_category_select(self, event=None):
-        sel = self.category_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        text = self.category_listbox.get(idx)
-        if idx == 0:
-            self.selected_category_var.set("全部")
-        else:
-            m = re.search(r"[\u4e00-\u9fa5]+", text)
-            if m:
-                clean_name = m.group(0)
-                if clean_name in VALID_CATEGORIES:
-                    self.selected_category_var.set(clean_name)
-        self.current_page = 0
-        self.apply_filter()
-
-    def apply_filter(self):
-        cat = self.selected_category_var.get()
-        kw = self.search_var.get().strip().lower()
-        
-        self.filtered_projects = []
-        for p in self.current_display_list:
-            p_cat = normalize_category(p.get("cat", "包装"))
-            if cat != "全部" and p_cat != cat:
-                continue
-            if kw and (kw not in p["sku"].lower() and kw not in p.get("brand", "").lower() and kw not in p_cat.lower()):
-                continue
-            self.filtered_projects.append(p)
-            
-        total_items = len(self.filtered_projects)
-        total_pages = max(1, (total_items + self.page_size - 1) // self.page_size)
-        if self.current_page >= total_pages:
-            self.current_page = total_pages - 1
-            
-        start_idx = self.current_page * self.page_size + 1 if total_items > 0 else 0
-        end_idx = min((self.current_page + 1) * self.page_size, total_items)
-        
-        self.page_info_lbl.config(text=f"共 {total_items} 个项目 | 正在显示第 {start_idx} - {end_idx} 项 (第 {self.current_page + 1}/{total_pages} 页)")
-        self.btn_prev.config(state=tk.NORMAL if self.current_page > 0 else tk.DISABLED)
-        self.btn_next.config(state=tk.NORMAL if self.current_page < total_pages - 1 else tk.DISABLED)
-        
-        self.render_cards()
-
-    def next_page(self):
-        self.current_page += 1
-        self.apply_filter()
-        self.canvas.yview_moveto(0)
-
-    def prev_page(self):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.apply_filter()
-            self.canvas.yview_moveto(0)
-
-    def on_canvas_configure(self, event):
-        self.canvas.itemconfig(self.canvas_window, width=event.width)
-        if self._resize_debounce_job:
-            self.root.after_cancel(self._resize_debounce_job)
-        self._resize_debounce_job = self.root.after(50, lambda: self._do_resize(event.width))
-
-    def _do_resize(self, width):
-        card_w = 210
-        cols = max(1, width // (card_w + 16))
-        if cols != self._last_cols:
-            self._last_cols = cols
-            self.render_cards()
-
-    def on_mouse_wheel(self, event):
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-    def _async_fetch_thumbnail(self, img_path, size, cache_key, slot_idx, gen_id):
-        try:
-            fast_thumb_p = get_fast_disk_thumbnail_path(img_path, size)
-            if fast_thumb_p and os.path.exists(fast_thumb_p):
-                im = Image.open(fast_thumb_p)
-                tk_img = ImageTk.PhotoImage(im)
-                self.root.after(0, self._async_apply_thumbnail, slot_idx, tk_img, gen_id, cache_key)
-        except Exception:
-            pass
-
-    def _async_apply_thumbnail(self, slot_idx, tk_img, gen_id, cache_key):
-        if gen_id != self.page_render_generation:
-            return
-        if cache_key:
-            self.thumb_tk_cache[cache_key] = tk_img
-        if slot_idx < len(self.card_slots):
-            slot = self.card_slots[slot_idx]
-            slot["img_lbl"].config(image=tk_img)
-            slot["img_lbl"].image = tk_img
-
-    def get_placeholder_thumbnail(self, size=(190, 190)):
-        cache_key = f"placeholder_{self.current_theme}"
-        if cache_key in self.thumb_tk_cache:
-            return self.thumb_tk_cache[cache_key]
-        c = self.colors
-        bg_c = (39, 41, 47, 255) if self.current_theme == "dark" else (244, 246, 249, 255)
-        fg_c = (110, 114, 122, 255) if self.current_theme == "dark" else (148, 163, 184, 255)
-        im = Image.new("RGBA", size, bg_c)
-        draw = ImageDraw.Draw(im)
-        draw.text((size[0]//2 - 40, size[1]//2 - 10), "📦 待渲染工程", fill=fg_c)
-        tk_img = ImageTk.PhotoImage(im)
-        self.thumb_tk_cache[cache_key] = tk_img
-        return tk_img
-
-    def render_cards(self):
-        c = self.colors
-        self.page_render_generation += 1
-        gen_id = self.page_render_generation
-        
-        container_width = self.canvas.winfo_width()
-        if container_width < 100:
-            container_width = 800
-        card_w = 210
-        cols = max(1, container_width // (card_w + 16))
-
-        start_idx = self.current_page * self.page_size
-        end_idx = start_idx + self.page_size
-        page_items = self.filtered_projects[start_idx:end_idx]
-        total_page_items = len(page_items)
-
-        for idx in range(len(self.card_slots)):
-            slot = self.card_slots[idx]
-            if idx < total_page_items:
-                proj = page_items[idx]
-                slot["active_proj"] = proj
-                row = idx // cols
-                col = idx % cols
-                
-                slot["card"].grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
-                
-                img_path = proj.get("thumbnail")
-                if not img_path or not os.path.exists(img_path):
-                    tk_thumb = self.get_placeholder_thumbnail()
-                    slot["img_lbl"].config(image=tk_thumb)
-                    slot["img_lbl"].image = tk_thumb
-                else:
-                    cache_key = f"{img_path}_{self.current_theme}"
-                    if cache_key in self.thumb_tk_cache:
-                        tk_thumb = self.thumb_tk_cache[cache_key]
-                        slot["img_lbl"].config(image=tk_thumb)
-                        slot["img_lbl"].image = tk_thumb
-                    else:
-                        tk_thumb = self.get_placeholder_thumbnail()
-                        slot["img_lbl"].config(image=tk_thumb)
-                        slot["img_lbl"].image = tk_thumb
-                        self.thumb_executor.submit(self._async_fetch_thumbnail, img_path, (190, 190), cache_key, idx, gen_id)
-                
-                cat_val = normalize_category(proj.get("cat", "包装"))
-                bg_c, fg_c = c["cat_colors"].get(cat_val, ("#26384C", "#96C2EC"))
-                slot["cat_tag"].config(text=cat_val, bg=bg_c, fg=fg_c)
-                
-                b_name = proj.get("brand", "")
-                if b_name:
-                    slot["brand_tag"].config(text=b_name, bg=c["badge_brand_bg"], fg=c["badge_brand_fg"])
-                    slot["brand_tag"].pack(side=tk.LEFT)
-                else:
-                    slot["brand_tag"].pack_forget()
+            if auto_ai and not opened_ai and fname.lower().endswith(('.ai', '.psd', '.pdf')):
+                try:
+                    os.startfile(dest_fpath)
+                    opened_ai = dest_fpath
+                except Exception:
+                    pass
                     
-                slot["title_lbl"].config(text=proj["sku"])
+            if auto_blend:
+                blend_dir = os.path.join(proj_dir, blend_sub)
+                target_blend = os.path.join(blend_dir, f"{sku}.blend")
+                is_first_creation = not os.path.exists(target_blend)
                 
-                has_path = bool(proj.get("path") and os.path.exists(proj["path"]))
-                slot["btn_open"].config(
-                    text="📁 文件夹" if has_path else "📁 未就绪",
-                    fg=c["btn_secondary_fg"] if has_path else c["fg_dim"]
-                )
-            else:
-                slot["active_proj"] = None
-                slot["card"].grid_remove()
-
-    def open_folder(self, path):
-        if path and os.path.exists(path):
-            try:
-                os.startfile(path)
-            except Exception as e:
-                messagebox.showerror("打开错误", str(e))
-        else:
-            messagebox.showwarning("提示", f"该项目的本地文件夹暂未找到或路径不存在:\n{path}")
-
-    def launch_blend(self, proj_path):
-        if not proj_path or not os.path.exists(proj_path):
-            messagebox.showwarning("提示", f"未找到该项目的本地文件夹:\n{proj_path}")
-            return
-        rule = self.get_current_folder_rule()
-        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
-        
-        blend_dir = os.path.join(proj_path, blend_sub) if blend_sub else proj_path
-        target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
-        blends = glob.glob(os.path.join(target_dir, "*.blend"))
-        if blends:
-            blends.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            chosen = blends[0]
-            try:
-                subprocess.Popen([BLENDER_EXE, chosen])
-            except Exception:
-                os.startfile(chosen)
-        else:
-            self.open_folder(proj_path)
-
-    def show_context_menu(self, event, proj):
-        menu = tk.Menu(self.root, tearoff=0, bg=self.colors["panel_bg"], fg=self.colors["fg"])
-        p = proj.get("path", "")
-        sku = proj.get("sku", "")
-        rule = self.get_current_folder_rule()
-        d_sub = rule.get("design_sub", "01_Design_平面原稿")
-        r_sub = rule.get("render_sub", "04_Renders_通道输出")
-        
-        menu.add_command(label=f"📁 打开文件夹: {sku}", command=lambda: self.open_folder(p))
-        menu.add_command(label="🚀 Blender 打开 3D 工程", command=lambda: self.launch_blend(p))
-        if p and os.path.exists(p):
-            if d_sub:
-                menu.add_command(label=f"🎨 查看 {d_sub}", command=lambda: self.open_folder(os.path.join(p, d_sub)))
-            if r_sub:
-                menu.add_command(label=f"🖼️ 查看 {r_sub}", command=lambda: self.open_folder(os.path.join(p, r_sub)))
+                if is_first_creation:
+                    tpl = get_valid_template_blend(self.cfg)
+                    if tpl and os.path.exists(tpl):
+                        shutil.copy2(tpl, target_blend)
+                    else:
+                        with open(target_blend, "wb") as bf:
+                            pass
+                            
+                if auto_open_bl and is_first_creation and not opened_blend:
+                    try:
+                        subprocess.Popen([BLENDER_EXE, target_blend])
+                        opened_blend = target_blend
+                    except Exception:
+                        os.startfile(target_blend)
+                        opened_blend = target_blend
+                        
+            if auto_excel:
+                ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+                if ex_path and os.path.exists(ex_path):
+                    try:
+                        wb = openpyxl.load_workbook(ex_path)
+                        sheet = wb.active
+                        sku_col = 2
+                        brand_col = 1
+                        cat_col = None
+                        for col_idx, cell in enumerate(sheet[1], start=1):
+                            val = str(cell.value or "").strip()
+                            if val in ("产品名称", "SKU", "品名"):
+                                sku_col = col_idx
+                            if val in ("品牌", "客户"):
+                                brand_col = col_idx
+                            if val in ("业务形态", "分类", "类别"):
+                                cat_col = col_idx
+                                
+                        sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower())
+                        exists = False
+                        for r in range(2, sheet.max_row + 1):
+                            c_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+                            if sku_clean and sku_clean == re.sub(r'[\s_\-\(\)（）]+', '', c_val.lower()):
+                                exists = True
+                                break
+                        if not exists:
+                            new_r = sheet.max_row + 1
+                            sheet.cell(row=new_r, column=brand_col, value=brand)
+                            sheet.cell(row=new_r, column=sku_col, value=sku)
+                            if cat_col:
+                                sheet.cell(row=new_r, column=cat_col, value=cat)
+                            wb.save(ex_path)
+                        wb.close()
+                    except Exception:
+                        pass
+            created_count += 1
             
-        menu.add_separator()
-        
-        cat_submenu = tk.Menu(menu, tearoff=0, bg=self.colors["panel_bg"], fg=self.colors["fg"])
-        for cat_item in VALID_CATEGORIES:
-            cat_submenu.add_command(
-                label=f"设为：{cat_item}",
-                command=lambda c=cat_item, pr=proj: self.change_project_category(pr, c)
-            )
-        menu.add_cascade(label=f"🏷️ 修改业务形态 (当前: {proj.get('cat', '包装')})", menu=cat_submenu)
-        
-        menu.add_separator()
-        if proj.get("thumbnail") and os.path.exists(proj["thumbnail"]):
-            menu.add_command(label="📊 将此渲染缩略图写入 Excel 台账 (图片列)", command=lambda pr=proj: self.sync_single_thumbnail_to_excel(pr))
-        menu.add_command(label="📋 复制完整物理路径", command=lambda: self.copy_path_to_clipboard(p))
-        menu.tk_popup(event.x_root, event.y_root)
-
-    def sync_single_thumbnail_to_excel(self, proj):
-        ex_path = self.excel_path_var.get().strip()
-        if not ex_path or not os.path.exists(ex_path):
-            messagebox.showwarning("提示", "请先绑定有效且存在的《产品列表.xlsx》！")
-            return
-            
-        thumb = proj.get("thumbnail")
-        if not thumb or not os.path.exists(thumb):
-            messagebox.showwarning("提示", f"[{proj.get('sku')}] 尚未找到渲染图！")
-            return
-            
-        ok, msg = update_thumbnail_to_excel(ex_path, proj.get("path"), proj.get("sku"), thumb)
-        if ok:
-            self.sync_status_lbl.config(text=f"✅ [{proj['sku']}] 缩略图已同步写入 Excel！", bg="#1D3328", fg="#6EE7B7")
-            self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
-            messagebox.showinfo("同步成功", msg)
-        else:
-            messagebox.showerror("同步失败", msg)
-
-    def sync_all_thumbnails_to_excel(self):
-        ex_path = self.excel_path_var.get().strip()
-        if not ex_path or not os.path.exists(ex_path):
-            messagebox.showwarning("提示", "请先绑定有效且存在的《产品列表.xlsx》！")
-            return
-            
-        valid_projs = [p for p in self.merged_projects if p.get("thumbnail") and os.path.exists(p["thumbnail"])]
-        if not valid_projs:
-            messagebox.showinfo("提示", "当前没有检测到任何含有渲染图的项目。")
-            return
-            
-        if not messagebox.askyesno("确认批量同步", f"检测到 {len(valid_projs)} 个项目包含渲染缩略图。\n是否一键将所有最新渲染图批量嵌入到《产品列表.xlsx》的【图片】列？"):
-            return
-            
-        ok, msg, count = batch_sync_all_thumbnails_to_excel(ex_path, self.merged_projects)
-        if ok:
-            self.sync_status_lbl.config(text=f"🎉 已将 {count} 张缩略图批量同步写入 Excel！", bg="#1D3328", fg="#6EE7B7")
-            self.root.after(4000, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
-            messagebox.showinfo("批量同步完成", msg)
-        else:
-            messagebox.showerror("同步失败", msg)
-
-    def change_project_category(self, proj, new_cat):
-        new_cat = normalize_category(new_cat)
-        proj["cat"] = new_cat
-        ex_path = self.excel_path_var.get().strip()
-        
-        update_project_category_in_excel(ex_path, proj.get("path"), proj.get("sku"), new_cat)
-        
-        if proj.get("path"):
-            cache_key = proj["path"].lower().replace("/", "\\")
-            if cache_key in self.meta_cache:
-                self.meta_cache[cache_key]["cat"] = new_cat
-                save_meta_cache(self.meta_cache)
-                
-        self.update_active_dataset()
-        self.sync_status_lbl.config(text=f"✅ [{proj['sku']}] 已更新为 【{new_cat}】！", bg="#1D3328", fg="#6EE7B7")
-        self.root.after(3500, lambda: self.sync_status_lbl.config(text="🟢 极速同步已就绪", bg=self.colors["status_bg"], fg=self.colors["status_fg"]))
-
-    def copy_path_to_clipboard(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        messagebox.showinfo("已复制", f"已复制路径到剪贴板:\n{text}")
+        return {"success": True, "msg": f"🎉 成功分拣归档 {created_count} 个项目工程！"}
 
     def export_html_gallery(self):
-        cur_ws = self.current_workspace_var.get().strip()
-        html_file = os.path.join(cur_ws if os.path.exists(cur_ws) else os.path.expanduser("~"), "🎨_美术资产全景视觉画廊.html")
-        cards_html = []
-        for p in self.current_display_list:
-            thumb_rel = p.get("thumbnail") or ""
-            thumb_src = html.escape("file:///" + thumb_rel.replace("\\", "/")) if (thumb_rel and os.path.exists(thumb_rel)) else "https://via.placeholder.com/300x300?text=No+Render"
-            folder_uri = html.escape("file:///" + p["path"].replace("\\", "/")) if p.get("path") else "#"
-            cat_name = html.escape(normalize_category(p.get("cat", "包装")))
-            brand_name = html.escape(str(p.get('brand', '')))
-            sku_name = html.escape(str(p.get('sku', '')))
-            path_name = html.escape(str(p.get('path', '')))
-            
-            cards_html.append(f"""
-            <div class="card" onclick="window.open('{folder_uri}')">
-                <div class="thumb-container"><img src="{thumb_src}" alt="{sku_name}" loading="lazy"></div>
-                <div class="meta">
-                    <div style="display:flex; gap:6px; margin-bottom:6px;">
-                        <span class="badge" style="background:#26384C; color:#96C2EC;">{cat_name}</span>
-                        <span class="badge" style="background:#3A3D46; color:#B2B6BE;">{brand_name}</span>
-                    </div>
-                    <h3 class="title">{sku_name}</h3>
-                    <p class="path">{path_name}</p>
-                </div>
+        ex_dir = self.cfg.get("current_workspace", DEFAULT_WORKSPACES[0])
+        html_file = os.path.join(ex_dir, "美术资产全景画廊.html")
+        
+        cards = []
+        for p in self.merged_projects:
+            thumb = p.get("thumbnail") or ""
+            norm_thumb = thumb.replace("\\", "/") if thumb else ""
+            t_src = f"file:///{norm_thumb}" if thumb and os.path.exists(thumb) else ""
+            img_html = f'<img src="{t_src}" loading="lazy" />' if t_src else '<div style="color:#666;font-size:12px;">待渲染</div>'
+            cards.append(f"""
+            <div class="card" onclick="alert('项目路径: {html.escape(p.get('path', ''))}')">
+              <div class="thumb-container">
+                {img_html}
+              </div>
+              <div class="meta">
+                <div class="badge">{html.escape(p.get('cat', '包装'))}</div>
+                <div class="title">{html.escape(p.get('sku', ''))}</div>
+                <div class="path">{html.escape(p.get('brand', ''))}</div>
+              </div>
             </div>
             """)
-        full_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>🎨 美术资产全景视觉画廊</title>
-<style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #222429; color: #e2e4e8; margin: 0; padding: 24px; }}
-h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 24px; color: #e2e4e8; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; }}
-.card {{ background: #30333A; border-radius: 10px; overflow: hidden; border: 1px solid #3d414a; cursor: pointer; transition: transform 0.2s, border-color 0.2s; }}
-.card:hover {{ transform: translateY(-4px); border-color: #4c84c4; box-shadow: 0 12px 24px -10px rgba(0,0,0,0.5); }}
-.thumb-container {{ width: 100%; aspect-ratio: 1; background: #27292f; display: flex; align-items: center; justify-content: center; }}
-.thumb-container img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
-.meta {{ padding: 12px; }}
-.badge {{ display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9999px; }}
-.title {{ font-size: 14px; font-weight: 600; margin: 0 0 4px 0; color: #e2e4e8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.path {{ font-size: 11px; color: #9699a2; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-</style></head><body><h1>🎨 美术资产全景视觉画廊 (共 {len(self.current_display_list)} 个项目)</h1><div class="grid">{"".join(cards_html)}</div></body></html>"""
+            
+        doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/><title>美术资产全景视觉画廊</title>
+        <style>
+        body {{ background: #1a1c23; color: #e2e4e8; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; padding: 24px; margin: 0; }}
+        h1 {{ font-size: 20px; margin-bottom: 20px; font-weight: 600; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }}
+        .card {{ background: #262930; border-radius: 8px; overflow: hidden; border: 1px solid #363942; transition: transform .2s; cursor: pointer; }}
+        .card:hover {{ transform: translateY(-4px); border-color: #3b82f6; }}
+        .thumb-container {{ width: 100%; aspect-ratio: 1; background: #1e2026; display: flex; align-items: center; justify-content: center; overflow: hidden; }}
+        .thumb-container img {{ width: 100%; height: 100%; object-fit: contain; }}
+        .meta {{ padding: 10px; }}
+        .badge {{ display: inline-block; font-size: 11px; background: #1e3a8a; color: #93c5fd; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-bottom: 4px; }}
+        .title {{ font-size: 13px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .path {{ font-size: 11px; color: #8c909c; margin-top: 2px; }}
+        </style></head><body>
+        <h1>🎨 美术资产全景视觉画廊 (共 {len(self.merged_projects)} 个项目)</h1>
+        <div class="grid">{''.join(cards)}</div>
+        </body></html>"""
+        
         try:
             with open(html_file, "w", encoding="utf-8") as f:
-                f.write(full_html)
+                f.write(doc)
             webbrowser.open("file:///" + html_file.replace("\\", "/"))
+            return {"success": True, "msg": f"已成功导出画廊到: {html_file}"}
         except Exception as e:
-            messagebox.showerror("导出错误", str(e))
+            return {"success": False, "msg": str(e)}
 
+# ----------------- 现代 GPU 硬件加速单页前端 (HTML/CSS/JS) -----------------
+FRONTEND_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>美术资产中枢 - GPU 硬件加速版</title>
+<style>
+:root {
+  --bg-base: #18191C;
+  --bg-surface: #202227;
+  --bg-card: #282A31;
+  --bg-card-hover: #32353E;
+  --border-color: #383B44;
+  --border-focus: #3B82F6;
+  --text-main: #F1F3F5;
+  --text-muted: #9BA1B0;
+  --text-dim: #6B7280;
+  --primary: #3B82F6;
+  --primary-hover: #2563EB;
+  --accent-green: #10B981;
+  --accent-amber: #F59E0B;
+  --accent-purple: #8B5CF6;
+  --accent-pink: #EC4899;
+}
+[data-theme="light"] {
+  --bg-base: #F3F4F6;
+  --bg-surface: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F8FAFC;
+  --border-color: #E2E8F0;
+  --border-focus: #2563EB;
+  --text-main: #0F172A;
+  --text-muted: #475569;
+  --text-dim: #94A3B8;
+  --primary: #2563EB;
+  --primary-hover: #1D4ED8;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+body {
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶部导航与操作栏 */
+.header-bar {
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 10;
+}
+.nav-tabs {
+  display: flex;
+  gap: 6px;
+  background: var(--bg-base);
+  padding: 4px;
+  border-radius: 8px;
+}
+.nav-tab {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+.nav-tab.active {
+  background: var(--primary);
+  color: #FFF;
+  box-shadow: 0 2px 6px rgba(37,99,235,0.3);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--text-muted);
+}
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #FFF;
+}
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+.status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  white-space: nowrap;
+}
+
+/* 主内容容器 */
+.main-viewport {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+.tab-content {
+  flex: 1;
+  display: none;
+  height: 100%;
+  overflow: hidden;
+}
+.tab-content.active {
+  display: flex;
+}
+
+/* 页面 1: 视觉画廊看板 */
+.hub-layout {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+.sidebar-filters {
+  width: 220px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-color);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+.filter-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.filter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s;
+}
+.filter-item:hover {
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+.filter-item.active {
+  background: var(--primary);
+  color: #FFF;
+  font-weight: 600;
+}
+.filter-count {
+  font-size: 11px;
+  background: rgba(255,255,255,0.1);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.gallery-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.gallery-top-bar {
+  padding: 10px 20px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  width: 280px;
+  gap: 6px;
+}
+.search-box input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  font-size: 13px;
+  width: 100%;
+}
+.view-select {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+/* GPU 硬件加速丝滑网格 */
+.cards-scroll-grid {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-auto-rows: max-content;
+  gap: 16px;
+  will-change: transform, scroll-position;
+  transform: translate3d(0, 0, 0);
+  overscroll-behavior: contain;
+}
+.cards-scroll-grid::-webkit-scrollbar {
+  width: 8px;
+}
+.cards-scroll-grid::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+.cards-scroll-grid::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+.cards-scroll-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+.asset-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.18s ease, box-shadow 0.18s ease;
+  contain: content;
+}
+.asset-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--border-focus);
+  box-shadow: 0 10px 20px -5px rgba(0,0,0,0.5);
+}
+.card-thumb-box {
+  width: 100%;
+  aspect-ratio: 1;
+  background: #141518;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+.card-thumb-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.25s ease;
+}
+.asset-card:hover .card-thumb-box img {
+  transform: scale(1.04);
+}
+.thumb-placeholder {
+  color: var(--text-dim);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.card-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.badge-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tag-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.tag-cat-包装 { background: rgba(59, 130, 246, 0.2); color: #93C5FD; border: 1px solid rgba(59, 130, 246, 0.3); }
+.tag-cat-套盒 { background: rgba(245, 158, 11, 0.2); color: #FCD34D; border: 1px solid rgba(245, 158, 11, 0.3); }
+.tag-cat-海报 { background: rgba(139, 92, 246, 0.2); color: #C4B5FD; border: 1px solid rgba(139, 92, 246, 0.3); }
+.tag-cat-物料 { background: rgba(16, 185, 129, 0.2); color: #6EE7B7; border: 1px solid rgba(16, 185, 129, 0.3); }
+.tag-brand {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.card-btn {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.1s;
+}
+.card-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--primary);
+}
+.card-btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #FFF;
+}
+.card-btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+/* 页面 2: 分拣与开工工作台 */
+.organizer-container {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+.form-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.form-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.form-control {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+.form-control:focus {
+  border-color: var(--primary);
+}
+
+.drop-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 30px;
+  text-align: center;
+  background: var(--bg-base);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.05);
+}
+.drop-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.drop-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.file-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.file-list-table th, .file-list-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+.file-list-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 浮动右键上下文菜单 */
+.context-menu {
+  position: fixed;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.6);
+  padding: 6px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1000;
+  min-width: 220px;
+}
+.menu-item {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.menu-item:hover {
+  background: var(--primary);
+  color: #FFF;
+}
+.menu-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+/* 规则管理器弹窗 */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.modal-overlay.active {
+  display: flex;
+}
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  width: 700px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+}
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  gap: 20px;
+}
+.rule-list {
+  width: 240px;
+  border-right: 1px solid var(--border-color);
+  padding-right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rule-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tree-preview {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #34D399;
+}
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+</style>
+</head>
+<body>
+
+<!-- 顶部导航 -->
+<div class="header-bar">
+  <div class="nav-tabs">
+    <div class="nav-tab active" onclick="switchTab('hub')">🖼️ 视觉资产看板</div>
+    <div class="nav-tab" onclick="switchTab('organizer')">📥 设计源文件分拣与开工</div>
+  </div>
+  
+  <div class="header-actions">
+    <span class="status-pill" id="syncStatus">🟢 极速同步已就绪</span>
+    <button class="btn" onclick="syncAllToExcel()">📤 同步缩略图到 Excel</button>
+    <button class="btn" onclick="bindNewExcel()">📊 绑定 Excel...</button>
+    <button class="btn" onclick="refreshData()">🔄 刷新</button>
+    <button class="btn" onclick="exportHtml()">🌐 导出画廊</button>
+    <button class="btn" onclick="toggleTheme()" id="themeBtn">🌙 护眼暗灰</button>
+  </div>
+</div>
+
+<!-- 主视口 -->
+<div class="main-viewport">
+
+  <!-- Tab 1: 视觉资产看板 -->
+  <div class="tab-content active" id="tab-hub">
+    <div class="hub-layout">
+      <!-- 侧边栏形态筛选 -->
+      <div class="sidebar-filters">
+        <div class="filter-section-title">🏷️ 业务形态分类</div>
+        <div class="filter-item active" onclick="setCategory('全部')">
+          <span>全部项目</span>
+          <span class="filter-count" id="count-all">0</span>
+        </div>
+        <div class="filter-item" onclick="setCategory('包装')">
+          <span>📦 包装</span>
+          <span class="filter-count" id="count-包装">0</span>
+        </div>
+        <div class="filter-item" onclick="setCategory('套盒')">
+          <span>🎁 套盒</span>
+          <span class="filter-count" id="count-套盒">0</span>
+        </div>
+        <div class="filter-item" onclick="setCategory('海报')">
+          <span>🖼️ 海报</span>
+          <span class="filter-count" id="count-海报">0</span>
+        </div>
+        <div class="filter-item" onclick="setCategory('物料')">
+          <span>📑 物料</span>
+          <span class="filter-count" id="count-物料">0</span>
+        </div>
+      </div>
+
+      <!-- 画廊主体 -->
+      <div class="gallery-area">
+        <div class="gallery-top-bar">
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="searchInput" placeholder="搜索产品 SKU / 品牌 / 类别..." oninput="onSearchInput()">
+          </div>
+          
+          <select class="view-select" id="viewModeSelect" onchange="onViewModeChange()">
+            <option value="merged">⚡ 智能融合视图</option>
+            <option value="excel">📊 仅 Excel 台账</option>
+            <option value="disk">💾 仅工作盘扫描</option>
+          </select>
+        </div>
+
+        <!-- 120 FPS GPU 硬件加速网格 -->
+        <div class="cards-scroll-grid" id="cardsGrid">
+          <!-- 动态卡片 -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: 设计源文件分拣与开工 -->
+  <div class="tab-content" id="tab-organizer">
+    <div class="organizer-container">
+      <div class="form-panel">
+        <div class="panel-title">📂 工作盘、客户、分类与归档文件夹规则</div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2;">
+            <label>主工作盘:</label>
+            <div style="display:flex;gap:6px;">
+              <select class="form-control" id="orgWorkspace" style="flex:1;" onchange="saveOrganizerConfig()"></select>
+              <button class="btn" onclick="addWorkspace()">➕ 绑定新工作盘</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>指定客户品牌:</label>
+            <div style="display:flex;gap:6px;">
+              <select class="form-control" id="orgBrand" style="flex:1;" onchange="saveOrganizerConfig()"></select>
+              <button class="btn" onclick="addBrand()">➕</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>业务形态:</label>
+            <select class="form-control" id="orgCategory" onchange="saveOrganizerConfig()">
+              <option value="包装">包装</option>
+              <option value="套盒">套盒</option>
+              <option value="海报">海报</option>
+              <option value="物料">物料</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1.5;">
+            <label>📁 归档规则:</label>
+            <div style="display:flex;gap:6px;">
+              <select class="form-control" id="orgRule" style="flex:1;" onchange="onRuleSelect()"></select>
+              <button class="btn" onclick="openRuleManager()">⚙️ 自定义规则...</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-panel">
+        <div class="panel-title">⚡ 自动化开工选项</div>
+        <div class="checkbox-row">
+          <label class="checkbox-item"><input type="checkbox" id="chkAi" checked onchange="saveOrganizerConfig()"> 🎨 自动打开 AI 设计原稿</label>
+          <label class="checkbox-item"><input type="checkbox" id="chkBlend" checked onchange="saveOrganizerConfig()"> ✨ 自动生成对应 .blend 工程</label>
+          <label class="checkbox-item"><input type="checkbox" id="chkOpenBlend" checked onchange="saveOrganizerConfig()"> 🚀 自动启动 Blender</label>
+          <label class="checkbox-item"><input type="checkbox" id="chkExcel" checked onchange="saveOrganizerConfig()"> 📊 自动录入 Excel</label>
+        </div>
+      </div>
+
+      <div class="form-panel">
+        <div class="panel-title" style="justify-content:space-between;">
+          <span>📥 待分拣设计源文件</span>
+          <button class="btn" onclick="installJsx()">🛠️ 一键将导出脚本注入 Illustrator</button>
+        </div>
+        <div class="drop-zone" onclick="pickSourceFiles()">
+          <div class="drop-title">📂 点击选择或拖放设计文件至此 (支持 AI / PSD / PDF / ZIP)</div>
+          <div class="drop-desc">自动提取文件名作为 SKU，归档至选定客户与工作盘</div>
+        </div>
+        <table class="file-list-table" id="fileTable" style="display:none;">
+          <thead>
+            <tr><th>文件名</th><th>提取 SKU</th><th>目标归档目录</th></tr>
+          </thead>
+          <tbody id="fileTableBody"></tbody>
+        </table>
+        <button class="btn btn-primary" style="padding:12px;font-size:14px;justify-content:center;" onclick="startOrganizeFlow()">🚀 一键分拣归档并拉起开工</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 右键上下文菜单 -->
+<div class="context-menu" id="contextMenu">
+  <div class="menu-item" id="menuOpenFolder" onclick="contextAction('folder')">📁 打开文件夹</div>
+  <div class="menu-item" id="menuOpenBlend" onclick="contextAction('blend')">🚀 Blender 打开 3D 工程</div>
+  <div class="menu-item" id="menuOpenDesign" onclick="contextAction('design')">🎨 查看 01_Design_平面原稿</div>
+  <div class="menu-item" id="menuOpenRenders" onclick="contextAction('renders')">🖼️ 查看 04_Renders_通道输出</div>
+  <div class="menu-separator"></div>
+  <div class="menu-item" onclick="contextAction('sync_excel')">📊 将此缩略图写入 Excel (图片列)</div>
+  <div class="menu-item" onclick="contextAction('copy_path')">📋 复制完整物理路径</div>
+</div>
+
+<!-- 规则管理器弹窗 -->
+<div class="modal-overlay" id="ruleModal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 style="font-size:15px;">⚙️ 自定义文件夹归档规则管理器</h3>
+      <button class="btn" onclick="closeRuleManager()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="rule-list">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:12px;color:var(--text-dim);font-weight:700;">规则预设库</span>
+          <button class="btn" style="padding:2px 8px;font-size:11px;" onclick="addNewRule()">➕ 新建</button>
+        </div>
+        <div id="ruleItemsList" style="display:flex;flex-direction:column;gap:4px;"></div>
+      </div>
+      <div class="rule-detail">
+        <div class="form-group">
+          <label>规则名称:</label>
+          <input type="text" class="form-control" id="ruleNameInput" oninput="updateRuleDraft()">
+        </div>
+        <div class="form-group">
+          <label>路径层级模板:</label>
+          <select class="form-control" id="rulePatternInput" onchange="updateRuleDraft()">
+            <option value="{brand}/{sku}">{brand}/{sku} (标准两级: 客户/SKU)</option>
+            <option value="{category}/{brand}/{sku}">{category}/{brand}/{sku} (三级: 形态/客户/SKU)</option>
+            <option value="{sku}">{sku} (一级: 扁平直接放工作盘)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>子文件夹列表 (每行一个):</label>
+          <textarea class="form-control" id="ruleSubfoldersInput" rows="5" oninput="updateRuleDraft()"></textarea>
+        </div>
+        <div class="form-group">
+          <label>📁 目录树实时预览:</label>
+          <div class="tree-preview" id="ruleTreePreview"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="deleteCurrentRule()" style="color:#EF4444;margin-right:auto;">🗑️ 删除此规则</button>
+      <button class="btn" onclick="closeRuleManager()">取消</button>
+      <button class="btn btn-primary" onclick="saveAndApplyRules()">💾 保存并应用此规则</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let state = {
+  config: {},
+  allProjects: { merged: [], excel: [], disk: [] },
+  currentDisplay: [],
+  selectedCategory: '全部',
+  searchKeyword: '',
+  activeTab: 'hub',
+  currentContextProj: null,
+  selectedSourceFiles: [],
+  editingRules: [],
+  activeRuleId: '',
+  selectedRuleId: ''
+};
+
+window.addEventListener('pywebviewready', async () => {
+  let initData = await window.pywebview.api.get_init_data();
+  state.config = initData.config;
+  state.editingRules = JSON.parse(JSON.stringify(initData.folder_rules));
+  state.activeRuleId = initData.active_rule_id;
+  
+  if (initData.theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeBtn').innerText = '☀️ 浅色模式';
+  }
+  
+  populateOrganizerUI(initData);
+  await refreshData();
+});
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  document.querySelectorAll('.nav-tab').forEach((el, idx) => {
+    el.classList.toggle('active', (tab === 'hub' && idx === 0) || (tab === 'organizer' && idx === 1));
+  });
+  document.getElementById('tab-hub').classList.toggle('active', tab === 'hub');
+  document.getElementById('tab-organizer').classList.toggle('active', tab === 'organizer');
+}
+
+async function refreshData() {
+  document.getElementById('syncStatus').innerText = '⚡ 正在加载资产...';
+  let res = await window.pywebview.api.load_all_projects();
+  state.allProjects = res;
+  updateCounts();
+  applyFilters();
+  document.getElementById('syncStatus').innerText = `🟢 极速同步已就绪 (已载入 ${state.allProjects.merged.length} 个项目)`;
+}
+
+function updateCounts() {
+  let list = getActiveDataset();
+  let counts = { '包装': 0, '套盒': 0, '海报': 0, '物料': 0 };
+  list.forEach(p => {
+    let c = p.cat || '包装';
+    if (counts[c] !== undefined) counts[c]++;
+  });
+  document.getElementById('count-all').innerText = list.length;
+  document.getElementById('count-包装').innerText = counts['包装'];
+  document.getElementById('count-套盒').innerText = counts['套盒'];
+  document.getElementById('count-海报').innerText = counts['海报'];
+  document.getElementById('count-物料').innerText = counts['物料'];
+}
+
+function getActiveDataset() {
+  let mode = document.getElementById('viewModeSelect').value;
+  return state.allProjects[mode] || state.allProjects.merged;
+}
+
+function setCategory(cat) {
+  state.selectedCategory = cat;
+  document.querySelectorAll('.filter-item').forEach(el => {
+    el.classList.toggle('active', el.innerText.includes(cat));
+  });
+  applyFilters();
+}
+
+function onSearchInput() {
+  state.searchKeyword = document.getElementById('searchInput').value.trim().toLowerCase();
+  applyFilters();
+}
+
+function onViewModeChange() {
+  updateCounts();
+  applyFilters();
+}
+
+function applyFilters() {
+  let list = getActiveDataset();
+  let filtered = list.filter(p => {
+    if (state.selectedCategory !== '全部' && (p.cat || '包装') !== state.selectedCategory) {
+      return false;
+    }
+    if (state.searchKeyword) {
+      let kw = state.searchKeyword;
+      let sku = (p.sku || '').toLowerCase();
+      let brand = (p.brand || '').toLowerCase();
+      let cat = (p.cat || '').toLowerCase();
+      if (!sku.includes(kw) && !brand.includes(kw) && !cat.includes(kw)) {
+        return false;
+      }
+    }
+    return true;
+  });
+  state.currentDisplay = filtered;
+  renderCards(filtered);
+}
+
+function renderCards(projects) {
+  let container = document.getElementById('cardsGrid');
+  if (projects.length === 0) {
+    container.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:80px;color:var(--text-dim);">未检索到符合条件的视觉工程资产</div>';
+    return;
+  }
+  
+  let htmlArr = [];
+  projects.forEach((p, idx) => {
+    let thumb = p.thumbnail;
+    let thumbSrc = thumb ? `/api/thumb?path=${encodeURIComponent(thumb)}&w=260&h=260` : '';
+    let cat = p.cat || '包装';
+    let brand = p.brand || '';
+    let hasPath = Boolean(p.path);
+    
+    htmlArr.push(`
+      <div class="asset-card" oncontextmenu="showContextMenu(event, ${idx})" onclick="openProjFolder('${encodeURIComponent(p.path || '')}')">
+        <div class="card-thumb-box">
+          ${thumbSrc ? `<img src="${thumbSrc}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />` : ''}
+          <div class="thumb-placeholder" style="${thumbSrc ? 'display:none;' : ''}">
+            <span style="font-size:24px;">📦</span>
+            <span>待渲染工程</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="badge-row">
+            <span class="tag-badge tag-cat-${cat}">${cat}</span>
+            ${brand ? `<span class="tag-brand">${brand}</span>` : ''}
+          </div>
+          <div class="card-title" title="${p.sku}">${p.sku}</div>
+          <div class="card-actions" onclick="event.stopPropagation()">
+            <button class="card-btn" onclick="openProjFolder('${encodeURIComponent(p.path || '')}')">${hasPath ? '📁 文件夹' : '📁 未就绪'}</button>
+            <button class="card-btn card-btn-primary" onclick="launchBlend('${encodeURIComponent(p.path || '')}')">🚀 3D工程</button>
+          </div>
+        </div>
+      </div>
+    `);
+  });
+  container.innerHTML = htmlArr.join('');
+}
+
+async function openProjFolder(encodedPath) {
+  let p = decodeURIComponent(encodedPath);
+  if (!p) {
+    alert('该项目暂未找到本地工程文件夹！');
+    return;
+  }
+  let res = await window.pywebview.api.open_folder(p);
+  if (!res.success) alert(res.msg);
+}
+
+async function launchBlend(encodedPath) {
+  let p = decodeURIComponent(encodedPath);
+  let res = await window.pywebview.api.launch_blend(p);
+  if (res && res.msg && !res.success) alert(res.msg);
+}
+
+// 右键菜单
+function showContextMenu(e, projIdx) {
+  e.preventDefault();
+  state.currentContextProj = state.currentDisplay[projIdx];
+  let menu = document.getElementById('contextMenu');
+  menu.style.display = 'flex';
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - 230)}px`;
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - 200)}px`;
+}
+document.addEventListener('click', () => {
+  document.getElementById('contextMenu').style.display = 'none';
+});
+
+async function contextAction(act) {
+  let p = state.currentContextProj;
+  if (!p) return;
+  if (act === 'folder') openProjFolder(p.path);
+  if (act === 'blend') launchBlend(p.path);
+  if (act === 'design') openProjFolder(p.path ? p.path + '/01_Design_平面原稿' : '');
+  if (act === 'renders') openProjFolder(p.path ? p.path + '/04_Renders_通道输出' : '');
+  if (act === 'copy_path') {
+    navigator.clipboard.writeText(p.path || '');
+    alert('已复制路径到剪贴板: ' + (p.path || ''));
+  }
+  if (act === 'sync_excel') {
+    let res = await window.pywebview.api.sync_single_thumbnail(p.path, p.sku, p.thumbnail);
+    alert(res.msg);
+  }
+}
+
+async function syncAllToExcel() {
+  let res = await window.pywebview.api.sync_all_thumbnails();
+  alert(res.msg);
+}
+
+async function bindNewExcel() {
+  let selected = await window.pywebview.api.pick_excel_file();
+  if (selected) {
+    alert('已成功绑定新 Excel: ' + selected);
+    await refreshData();
+  }
+}
+
+async function exportHtml() {
+  let res = await window.pywebview.api.export_html_gallery();
+  if (res.msg) alert(res.msg);
+}
+
+function toggleTheme() {
+  let cur = document.documentElement.getAttribute('data-theme');
+  let next = cur === 'light' ? 'dark' : 'light';
+  if (next === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeBtn').innerText = '☀️ 浅色模式';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    document.getElementById('themeBtn').innerText = '🌙 护眼暗灰';
+  }
+  window.pywebview.api.save_settings({ theme: next });
+}
+
+// 分拣页面逻辑
+function populateOrganizerUI(data) {
+  let wsSel = document.getElementById('orgWorkspace');
+  wsSel.innerHTML = data.workspaces.map(w => `<option value="${w}" ${w === data.current_workspace ? 'selected':''}>${w}</option>`).join('');
+  
+  let bSel = document.getElementById('orgBrand');
+  bSel.innerHTML = data.curated_brands.map(b => `<option value="${b}" ${b === data.current_brand ? 'selected':''}>${b}</option>`).join('');
+  
+  document.getElementById('orgCategory').value = data.default_category || '包装';
+  
+  let rSel = document.getElementById('orgRule');
+  rSel.innerHTML = state.editingRules.map(r => `<option value="${r.id}" ${r.id === state.activeRuleId ? 'selected':''}>${r.name}</option>`).join('');
+}
+
+async function addWorkspace() {
+  let res = await window.pywebview.api.pick_workspace_dir();
+  if (res) {
+    let wsSel = document.getElementById('orgWorkspace');
+    wsSel.innerHTML = res.workspaces.map(w => `<option value="${w}" ${w === res.selected ? 'selected':''}>${w}</option>`).join('');
+  }
+}
+
+function addBrand() {
+  let b = prompt('请输入新品牌/客户名称:');
+  if (b && b.trim()) {
+    b = b.trim();
+    let bSel = document.getElementById('orgBrand');
+    let opt = document.createElement('option');
+    opt.value = b; opt.innerText = b; opt.selected = true;
+    bSel.appendChild(opt);
+    let brands = state.config.curated_brands || [];
+    if (!brands.includes(b)) brands.push(b);
+    state.config.curated_brands = brands;
+    state.config.current_brand = b;
+    window.pywebview.api.save_settings({ curated_brands: brands, current_brand: b });
+  }
+}
+
+function saveOrganizerConfig() {
+  let newCfg = {
+    current_workspace: document.getElementById('orgWorkspace').value,
+    current_brand: document.getElementById('orgBrand').value,
+    default_category: document.getElementById('orgCategory').value,
+    active_rule_id: document.getElementById('orgRule').value,
+    auto_open_ai: document.getElementById('chkAi').checked,
+    auto_create_blend: document.getElementById('chkBlend').checked,
+    auto_open_blender: document.getElementById('chkOpenBlend').checked,
+    auto_append_to_excel: document.getElementById('chkExcel').checked
+  };
+  window.pywebview.api.save_settings(newCfg);
+}
+
+async function pickSourceFiles() {
+  let files = await window.pywebview.api.pick_source_files();
+  if (files && files.length > 0) {
+    state.selectedSourceFiles = files;
+    let tbody = document.getElementById('fileTableBody');
+    let ws = document.getElementById('orgWorkspace').value;
+    let brand = document.getElementById('orgBrand').value;
+    
+    tbody.innerHTML = files.map(f => {
+      let fname = f.split(/[\\\\/]/).pop();
+      let sku = fname.replace(/\\.[^/.]+$/, "");
+      return `<tr><td>${fname}</td><td><strong>${sku}</strong></td><td style="color:var(--text-dim);">${ws}\\${brand}\\${sku}</td></tr>`;
+    }).join('');
+    document.getElementById('fileTable').style.display = 'table';
+  }
+}
+
+async function startOrganizeFlow() {
+  if (state.selectedSourceFiles.length === 0) {
+    alert('请先选择或拖拽待分拣的设计文件！');
+    return;
+  }
+  let payload = {
+    brand: document.getElementById('orgBrand').value,
+    cat: document.getElementById('orgCategory').value,
+    files: state.selectedSourceFiles,
+    auto_open_ai: document.getElementById('chkAi').checked,
+    auto_create_blend: document.getElementById('chkBlend').checked,
+    auto_open_blender: document.getElementById('chkOpenBlend').checked,
+    auto_append_excel: document.getElementById('chkExcel').checked
+  };
+  let res = await window.pywebview.api.execute_organize(payload);
+  alert(res.msg);
+  if (res.success) {
+    state.selectedSourceFiles = [];
+    document.getElementById('fileTable').style.display = 'none';
+    await refreshData();
+  }
+}
+
+async function installJsx() {
+  let res = await window.pywebview.api.install_ai_jsx_script();
+  alert(res.msg);
+}
+
+// 规则管理器
+function openRuleManager() {
+  state.selectedRuleId = document.getElementById('orgRule').value;
+  renderRuleModal();
+  document.getElementById('ruleModal').classList.add('active');
+}
+function closeRuleManager() {
+  document.getElementById('ruleModal').classList.remove('active');
+}
+function renderRuleModal() {
+  let listEl = document.getElementById('ruleItemsList');
+  listEl.innerHTML = state.editingRules.map(r => `
+    <div class="filter-item ${r.id === state.selectedRuleId ? 'active':''}" onclick="selectRuleToEdit('${r.id}')">
+      ${r.name}
+    </div>
+  `).join('');
+  
+  let cur = state.editingRules.find(r => r.id === state.selectedRuleId) || state.editingRules[0];
+  if (cur) {
+    state.selectedRuleId = cur.id;
+    document.getElementById('ruleNameInput').value = cur.name || '';
+    document.getElementById('rulePatternInput').value = cur.path_pattern || '{brand}/{sku}';
+    document.getElementById('ruleSubfoldersInput').value = (cur.subfolders || []).join('\\n');
+    updateRuleTreePreview(cur);
+  }
+}
+function selectRuleToEdit(id) {
+  state.selectedRuleId = id;
+  renderRuleModal();
+}
+function updateRuleDraft() {
+  let cur = state.editingRules.find(r => r.id === state.selectedRuleId);
+  if (!cur) return;
+  cur.name = document.getElementById('ruleNameInput').value;
+  cur.path_pattern = document.getElementById('rulePatternInput').value;
+  cur.subfolders = document.getElementById('ruleSubfoldersInput').value.split('\\n').map(s => s.trim()).filter(Boolean);
+  updateRuleTreePreview(cur);
+}
+function updateRuleTreePreview(rule) {
+  let pat = rule.path_pattern || '{brand}/{sku}';
+  let subs = rule.subfolders || [];
+  let rootName = pat.replace('{brand}', '柏缇').replace('{sku}', '红参抗皱霜').replace('{category}', '包装');
+  let tree = `📁 主工作盘 /\\n└── 📁 ${rootName}\\n` + subs.map((s, idx) => `${idx === subs.length-1 ? '    └──':'    ├──'} 📂 ${s}`).join('\\n');
+  document.getElementById('ruleTreePreview').innerText = tree;
+}
+function addNewRule() {
+  let newId = 'custom_rule_' + Date.now();
+  state.editingRules.push({
+    id: newId,
+    name: '✨ 新建自定义规则',
+    path_pattern: '{brand}/{sku}',
+    subfolders: ['01_Design_平面原稿', '02_Textures_贴图资产', '03_3D_三维工程', '04_Renders_通道输出', '05_Delivery_最终交付'],
+    design_sub: '01_Design_平面原稿',
+    blend_sub: '03_3D_三维工程',
+    render_sub: '04_Renders_通道输出'
+  });
+  state.selectedRuleId = newId;
+  renderRuleModal();
+}
+function deleteCurrentRule() {
+  if (state.editingRules.length <= 1) {
+    alert('至少保留一套规则！');
+    return;
+  }
+  state.editingRules = state.editingRules.filter(r => r.id !== state.selectedRuleId);
+  state.selectedRuleId = state.editingRules[0].id;
+  renderRuleModal();
+}
+function saveAndApplyRules() {
+  state.activeRuleId = state.selectedRuleId;
+  let rSel = document.getElementById('orgRule');
+  rSel.innerHTML = state.editingRules.map(r => `<option value="${r.id}" ${r.id === state.activeRuleId ? 'selected':''}>${r.name}</option>`).join('');
+  window.pywebview.api.save_settings({
+    folder_rules: state.editingRules,
+    active_rule_id: state.activeRuleId
+  });
+  closeRuleManager();
+  alert('已成功保存并应用此归档规则！');
+}
+</script>
+</body>
+</html>
+"""
+
+# ----------------- 主程序入口 -----------------
+def run_app():
+    api = PackagingBridgeAPI()
+    
+    # 启动轻量高效本地 HTTP 微服务
+    AppHttpHandler.bridge_api = api
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), AppHttpHandler)
+    port = httpd.server_address[1]
+    
+    srv_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    srv_thread.start()
+    
+    win = webview.create_window(
+        title="美术资产中枢 - Art Asset Hub (v1.0 正式版 GPU 硬件加速)",
+        url=f"http://127.0.0.1:{port}",
+        js_api=api,
+        width=1280,
+        height=850,
+        min_size=(1020, 680),
+        background_color="#18191C"
+    )
+    api.set_window(win)
+    
+    # 使用 Windows Edge Chromium (DirectX GPU 硬件加速)
+    webview.start(gui="edgechromium", debug=False)
+    
+    httpd.shutdown()
 
 if __name__ == "__main__":
-    args_files = sys.argv[1:] if len(sys.argv) > 1 else None
-    root_win = tk.Tk()
-    try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        pass
-    app = PackagingStudioSuite(root_win, initial_files=args_files)
-    root_win.mainloop()
+    run_app()
