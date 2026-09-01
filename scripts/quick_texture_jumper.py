@@ -112,12 +112,23 @@ def on_load_blend_post(dummy):
 
 
 # ---------------- 核心操作符 ----------------
-class NODE_OT_open_project_texture(bpy.types.Operator, ImportHelper):
+class NODE_OT_open_project_texture(bpy.types.Operator):
     """直接打开当前项目的贴图目录 (02_Textures / png) 选择图片并赋给选中节点"""
     bl_idname = "node.open_project_texture"
     bl_label = "📂 打开项目贴图目录"
     bl_options = {'REGISTER', 'UNDO'}
 
+    directory: bpy.props.StringProperty(
+        name="Directory",
+        subtype='DIR_PATH',
+        options={'HIDDEN', 'SKIP_SAVE'}
+    )
+    filepath: bpy.props.StringProperty(
+        name="File Path",
+        maxlen=1024,
+        subtype='FILE_PATH',
+        options={'HIDDEN', 'SKIP_SAVE'}
+    )
     filename_ext = ".png;.jpg;.jpeg;.psd;.tif;.tiff;.exr;.hdr"
     filter_glob: bpy.props.StringProperty(
         default="*.png;*.jpg;*.jpeg;*.psd;*.tif;*.tiff;*.exr;*.hdr",
@@ -127,9 +138,14 @@ class NODE_OT_open_project_texture(bpy.types.Operator, ImportHelper):
     def invoke(self, context, event):
         tex_dir = get_current_project_texture_dir()
         if tex_dir and os.path.exists(tex_dir):
-            self.directory = os.path.normpath(tex_dir) + os.sep
+            norm_dir = os.path.normpath(tex_dir)
+            if not norm_dir.endswith(os.sep):
+                norm_dir += os.sep
+            self.directory = norm_dir
+            self.filepath = norm_dir
             update_blender_bookmarks(tex_dir)
-        return ImportHelper.invoke(self, context, event)
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
     def execute(self, context):
         if not self.filepath:
