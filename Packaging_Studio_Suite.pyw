@@ -9,22 +9,27 @@
    - 4-Worker QThreadPool 异步图像流式解码与信号槽 (Signal/Slot) 回填；
    - 彻底绝缘假死与“未响应”，冷启动 0.05 秒瞬开。
 
-2. 🏢 客户与品牌库管理系统 (Client & Brand Taxonomy Manager)：
+2. 🎨 纯净 Beauty 渲染成片缩略图引擎 (Strict Beauty Render Thumbnail Filter)：
+   - 严格禁止抓取 png / PNG / texture / 贴图 / 01_Design 等源文件与贴图目录；
+   - 严格过滤 clown (小丑选区图)、cryptomatte、法线、深度、AO、粗糙度、Alpha等所有通道图；
+   - 仅采纳 04_Renders_通道输出 / 05_Delivery_最终交付 / 渲染 / 03_输出 中的最终 Beauty 效果图。
+
+3. 🐱 萌猫开屏等待页 (最少 2.0 秒无缝展示) & Windows 沉浸式暗黑顶栏：
+   - 启动时全屏居中展示萌猫开屏界面，后台无论多快完成均保持至少 2.0 秒视觉享受；
+   - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
+
+4. 🏢 客户与品牌库管理控制台 (Client & Brand Taxonomy Manager)：
    - 🏷️ 客户品牌白名单库：自定义/排序核心客户品牌；
    - 🔗 别名与系列归并映射：支持将“柏缇绿野幽香”、“柏缇防晒乳”自动归并进“柏缇”；
    - 🚫 非品牌智能过滤黑名单：自动/手动屏蔽 Fonts、HDRI、模型库、临时文件夹等杂乱目录；
    - 🖱️ 右键快捷菜单：支持直接在侧边栏右键重命名、归并或隐藏非品牌项。
 
-3. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
+5. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
    - 🏷️ 上组：业务形态分类 (全部 / 包装 / 套盒 / 海报 / 物料)
    - 🏢 下组：客户品牌库 (全部品牌 / 柏缇 / 森之露 / 语后 / 漱外... 动态联动)
    - ⏱️ 4 级资产时间阶梯排序 (Tier 1 渲染图修改时间 > Tier 2 贴图资产时间 > Tier 3 Blend文件时间 > 文件夹时间)
 
-4. 🐱 萌猫开屏等待页与 Windows 沉浸式暗黑顶栏：
-   - 启动时展示萌猫开工界面，后台全量资产就绪后无缝淡入主界面；
-   - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
-
-5. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
+6. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
    - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
    - 自动绑定 E:\\zjc\\包装默认文件.blend 母版工程并拉起 Blender 5.2 LTS 开工；
    - 自动将新项目录入《产品列表.xlsx》；
@@ -171,6 +176,30 @@ DEFAULT_BRAND_ALIASES = {
 }
 
 VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
+
+CHANNEL_OR_CLOWN_KEYWORDS = (
+    'clown', 'clow', 'cryptomatte', 'crypto', '选区', '通道', 'pass', 'mask',
+    'alpha', 'normal', '法线', 'depth', '深度', 'zdepth', 'mist', 'ao', 'ambient',
+    'roughness', '粗糙度', 'specular', '高光', 'shadow', '阴影', 'diffuse',
+    'glossy', 'emission', 'uv', 'position', 'vector', 'motion'
+)
+
+def is_channel_or_clown_image(filepath):
+    if not filepath:
+        return True
+    name_low = os.path.basename(filepath).lower()
+    return any(kw in name_low for kw in CHANNEL_OR_CLOWN_KEYWORDS)
+
+def is_valid_beauty_thumbnail(thumb_path):
+    if not thumb_path or not os.path.exists(thumb_path):
+        return False
+    if is_channel_or_clown_image(thumb_path):
+        return False
+    dir_parts = [p.lower() for p in os.path.normpath(thumb_path).split(os.sep)]
+    invalid_dirs = {'png', 'texture', 'textures', '02_textures_贴图资产', '01_design_平面原稿', '贴图', '贴图资产', 'design'}
+    if any(p in invalid_dirs for p in dir_parts):
+        return False
+    return True
 
 DEFAULT_FOLDER_RULES = [
     {
@@ -701,53 +730,40 @@ def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
         pass
     return projects
 
+# ----------------- 纯净成片 Beauty 渲染图查找引擎 -----------------
 def find_project_thumbnail(proj_dir):
+    """
+    仅提取真实成片渲染效果图 (Beauty Render)，严格排除：
+    1. png / PNG / texture / 贴图 / 01_Design 等源文件与贴图目录
+    2. 任何小丑选区 (clown)、Cryptomatte、法线、深度、AO、Roughness、Alpha、Shadow等分层通道图
+    """
     if not proj_dir or not os.path.exists(proj_dir):
         return None
     render_candidates = [
-        os.path.join(proj_dir, "png"),
-        os.path.join(proj_dir, "PNG"),
         os.path.join(proj_dir, "04_Renders_通道输出"),
         os.path.join(proj_dir, "04_Renders_高清分层输出"),
-        os.path.join(proj_dir, "03_输出"),
-        os.path.join(proj_dir, "04_输出"),
         os.path.join(proj_dir, "05_Delivery_最终交付"),
         os.path.join(proj_dir, "05_Final_精修定稿"),
         os.path.join(proj_dir, "渲染"),
+        os.path.join(proj_dir, "03_输出"),
+        os.path.join(proj_dir, "04_输出"),
         os.path.join(proj_dir, "Renders"),
-        proj_dir
+        os.path.join(proj_dir, "renders")
     ]
     
     img_exts = ("*.png", "*.jpg", "*.jpeg", "*.webp")
     for r_dir in render_candidates:
-        if os.path.exists(r_dir):
+        if os.path.exists(r_dir) and os.path.isdir(r_dir):
             imgs = []
             for ext in img_exts:
                 imgs.extend(glob.glob(os.path.join(r_dir, ext)))
                 imgs.extend(glob.glob(os.path.join(r_dir, "*", ext)))
             if imgs:
-                beauty_imgs = [
-                    f for f in imgs 
-                    if not any(ch in os.path.basename(f).lower() for ch in [
-                        "cryptomatte", "crypto", "选区", "normal", "法线", "depth", "深度", 
-                        "mist", "ao", "roughness", "specular", "alpha", "mask", "shadow"
-                    ])
-                ]
+                beauty_imgs = [f for f in imgs if not is_channel_or_clown_image(f)]
                 if beauty_imgs:
                     beauty_imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
                     return beauty_imgs[0]
-                imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                return imgs[0]
-                
-    textures_dir = os.path.join(proj_dir, "02_Textures_贴图资产")
-    if os.path.exists(textures_dir):
-        imgs = []
-        for ext in img_exts:
-            imgs.extend(glob.glob(os.path.join(textures_dir, ext)))
-        if imgs:
-            imgs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return imgs[0]
-            
+                    
     return None
 
 def auto_detect_category_from_name(name):
@@ -768,17 +784,17 @@ def get_project_asset_mtime(proj_dir):
         return 0
     try:
         render_candidates = [
-            os.path.join(proj_dir, "png"),
-            os.path.join(proj_dir, "PNG"),
             os.path.join(proj_dir, "04_Renders_通道输出"),
             os.path.join(proj_dir, "04_Renders_高清分层输出"),
+            os.path.join(proj_dir, "05_Delivery_最终交付"),
+            os.path.join(proj_dir, "05_Final_精修定稿"),
             os.path.join(proj_dir, "渲染"),
             os.path.join(proj_dir, "03_输出"),
             os.path.join(proj_dir, "04_输出"),
-            os.path.join(proj_dir, "05_Delivery_最终交付"),
-            os.path.join(proj_dir, "05_Final_精修定稿"),
             os.path.join(proj_dir, "Renders"),
             os.path.join(proj_dir, "renders"),
+            os.path.join(proj_dir, "png"),
+            os.path.join(proj_dir, "PNG"),
         ]
         img_exts = ('.png', '.jpg', '.jpeg', '.webp')
         
@@ -903,7 +919,7 @@ def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignore
                         cache_key in meta_cache 
                         and meta_cache[cache_key].get("mtime") == s_mtime
                         and cached_thumb
-                        and os.path.exists(cached_thumb)
+                        and is_valid_beauty_thumbnail(cached_thumb)
                     )
                     
                     if has_valid_cached_thumb:
@@ -975,7 +991,7 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
             "time": ep.get("time", ""),
             "row_idx": ep.get("row_idx", 0),
             "path": matched_dp["path"] if matched_dp else (ep.get("path") or ""),
-            "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and os.path.exists(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
+            "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and is_valid_beauty_thumbnail(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
             "mtime": matched_dp["mtime"] if matched_dp else 0
         }
         if matched_dp:
@@ -1053,9 +1069,9 @@ def batch_sync_all_thumbnails_to_excel(excel_path, projects):
     if not excel_path or not os.path.exists(excel_path):
         return False, "Excel 文件未找到！"
         
-    valid_items = [p for p in projects if p.get("thumbnail") and os.path.exists(p["thumbnail"])]
+    valid_items = [p for p in projects if p.get("thumbnail") and is_valid_beauty_thumbnail(p["thumbnail"])]
     if not valid_items:
-        return False, "当前没有找到任何带有有效缩略图的项目！"
+        return False, "当前没有找到任何带有有效成片缩略图的项目！"
         
     success_count = 0
     try:
@@ -1105,7 +1121,7 @@ def batch_sync_all_thumbnails_to_excel(excel_path, projects):
                 
         wb.save(excel_path)
         wb.close()
-        return True, f"🎉 批量同步完成！已成功将 {success_count} 个项目的渲染图写入 Excel 台账！"
+        return True, f"🎉 批量同步完成！已成功将 {success_count} 个项目的成片效果图写入 Excel 台账！"
     except PermissionError:
         return False, "无法保存 Excel！请先关闭 WPS 或 Excel 后重试。"
     except Exception as e:
@@ -1226,7 +1242,6 @@ class BrandManagerDialog(QDialog):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
         
-        # Tab 1: 常用品牌白名单
         tab_curated = QWidget()
         t1_layout = QHBoxLayout(tab_curated)
         
@@ -1258,7 +1273,6 @@ class BrandManagerDialog(QDialog):
         
         self.tabs.addTab(tab_curated, "  🏢 正式客户品牌库  ")
         
-        # Tab 2: 别名与系列归并
         tab_alias = QWidget()
         t2_layout = QVBoxLayout(tab_alias)
         t2_layout.addWidget(QLabel("<b>子系列 / 历史目录 归并到 目标品牌映射表：</b>"))
@@ -1283,7 +1297,6 @@ class BrandManagerDialog(QDialog):
         
         self.tabs.addTab(tab_alias, "  🔗 别名与系列归并  ")
         
-        # Tab 3: 非品牌黑名单 (已忽略目录)
         tab_ignore = QWidget()
         t3_layout = QVBoxLayout(tab_ignore)
         t3_layout.addWidget(QLabel("<b>已屏蔽的非品牌目录 (如字体、HDRI环境、临时文件、模型库等):</b>"))
@@ -1309,7 +1322,6 @@ class BrandManagerDialog(QDialog):
         
         self.tabs.addTab(tab_ignore, "  🚫 非品牌屏蔽黑名单  ")
         
-        # 底部确定取消
         bottom_bar = QHBoxLayout()
         bottom_bar.addStretch()
         btn_save = QPushButton("💾 保存并立即生效")
@@ -1527,7 +1539,7 @@ class GalleryCardDelegate(QStyledItemDelegate):
             painter.setPen(QColor("#6B7280"))
             painter.drawText(thumb_rect, Qt.AlignCenter, "📦 待渲染工程")
             
-            if img_path and img_path not in model.loading_set and os.path.exists(img_path):
+            if img_path and img_path not in model.loading_set and os.path.exists(img_path) and is_valid_beauty_thumbnail(img_path):
                 model.loading_set.add(img_path)
                 task = ImageLoadTask(img_path)
                 task.signals.finished.connect(self.on_image_loaded)
@@ -1795,7 +1807,6 @@ class MainWindow(QMainWindow):
         self.current_theme = self.cfg.get("theme", "dark")
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
         
-        # 品牌库体系
         self.curated_brands = self.cfg.get("curated_brands", DEFAULT_CONFIG["curated_brands"])
         self.ignored_brands = self.cfg.get("ignored_brands", DEFAULT_IGNORED_BRANDS)
         self.brand_aliases = self.cfg.get("brand_aliases", DEFAULT_BRAND_ALIASES)
@@ -1809,7 +1820,6 @@ class MainWindow(QMainWindow):
         self.merged_projects = []
         self.current_display_list = []
         
-        # 双维度过滤状态
         self.selected_category = "全部"
         self.selected_brand = "全部"
         self.brand_counts_map = {}
@@ -1901,7 +1911,7 @@ class MainWindow(QMainWindow):
         self.setup_organizer_tab(self.tab_organizer)
         self.tabs.addTab(self.tab_organizer, "  📥 设计源文件分拣与开工  ")
 
-    # ---------------- Tab 1: 视觉资产看板 (双维度侧边栏 + 品牌管理) ----------------
+    # ---------------- Tab 1: 视觉资产看板 ----------------
     def setup_hub_tab(self, parent):
         layout = QHBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -1924,7 +1934,7 @@ class MainWindow(QMainWindow):
         self.category_list.currentRowChanged.connect(self.on_category_changed)
         side_layout.addWidget(self.category_list)
 
-        # 下组：客户品牌库 (带 ⚙️ 管理按钮)
+        # 下组：客户品牌库
         brand_header_box = QHBoxLayout()
         brand_header_box.addWidget(QLabel("<b>🏢 客户与品牌库</b>"))
         brand_header_box.addStretch()
@@ -2118,7 +2128,6 @@ class MainWindow(QMainWindow):
 
     # ---------------- 品牌管理控制台联动 ----------------
     def open_brand_manager(self):
-        # 实时探测磁盘原生一级目录
         cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
         raw_dirs = []
         if cur_ws and os.path.exists(cur_ws):
@@ -2241,7 +2250,6 @@ class MainWindow(QMainWindow):
                 cat_counts["包装"] += 1
                 
             raw_b = p.get("raw_brand", p.get("brand", "")).strip()
-            # 过滤黑名单目录
             if raw_b in self.ignored_brands:
                 continue
             b = p.get("brand", "").strip() or "未分类品牌"
@@ -2251,12 +2259,10 @@ class MainWindow(QMainWindow):
 
         self.brand_counts_map = brand_counts
 
-        # 刷新形态列表
         cats = [("全部形态", "全部形态"), ("📦 包装", "包装"), ("🎁 套盒", "套盒"), ("🖼️ 海报", "海报"), ("📑 物料", "物料")]
         for idx, (label, key) in enumerate(cats):
             self.category_list.item(idx).setText(f"{label} ({cat_counts[key]})")
 
-        # 刷新品牌列表 (按数量降序排列，仅展示有效客户品牌)
         cur_selected_brand = self.selected_brand
         self.brand_list.blockSignals(True)
         self.brand_list.clear()
@@ -2310,19 +2316,15 @@ class MainWindow(QMainWindow):
             brand = p.get("brand", "").strip() or "未分类品牌"
             raw_brand = p.get("raw_brand", brand).strip()
             
-            # 若品牌属于屏蔽目录，且用户未在搜索框明确搜索，则过滤
             if not kw and (raw_brand in self.ignored_brands or brand in self.ignored_brands):
                 continue
                 
-            # 形态过滤
             if self.selected_category != "全部" and cat != self.selected_category:
                 continue
                 
-            # 品牌过滤
             if self.selected_brand != "全部" and brand != self.selected_brand:
                 continue
                 
-            # 关键字过滤
             if kw:
                 sku = p.get("sku", "").lower()
                 b_low = brand.lower()
@@ -2366,7 +2368,7 @@ class MainWindow(QMainWindow):
             cat_menu.addAction(f"设为：{c}", lambda c_val=c: self.change_project_category(proj, c_val))
             
         menu.addSeparator()
-        if proj.get("thumbnail") and os.path.exists(proj["thumbnail"]):
+        if proj.get("thumbnail") and is_valid_beauty_thumbnail(proj["thumbnail"]):
             menu.addAction("📊 将此缩略图写入 Excel 台账 (图片列)", lambda: self.sync_single_thumbnail_to_excel(proj))
         menu.addAction("📋 复制完整物理路径", lambda: QApplication.clipboard().setText(real_p or p))
 
@@ -2505,7 +2507,7 @@ class MainWindow(QMainWindow):
         for p in self.current_display_list:
             thumb = p.get("thumbnail") or ""
             norm_thumb = thumb.replace("\\", "/") if thumb else ""
-            t_src = f"file:///{norm_thumb}" if thumb and os.path.exists(thumb) else ""
+            t_src = f"file:///{norm_thumb}" if thumb and is_valid_beauty_thumbnail(thumb) else ""
             img_html = f'<img src="{t_src}" loading="lazy" />' if t_src else '<div style="color:#666;font-size:12px;">待渲染</div>'
             cards.append(f"""
             <div class="card" onclick="alert('项目路径: {html.escape(p.get('path', ''))}')">
@@ -2604,6 +2606,17 @@ class MainWindow(QMainWindow):
                 self.cfg["workspaces"] = self.workspaces
                 self.combo_ws.addItem(d)
             self.combo_ws.setCurrentText(d)
+            self.on_organizer_setting_changed()
+
+    def add_brand(self):
+        b, ok = QInputDialog.getText(self, "新增客户品牌", "请输入新客户品牌名称:")
+        if ok and b.strip():
+            b = b.strip()
+            if b not in self.curated_brands:
+                self.curated_brands.append(b)
+                self.cfg["curated_brands"] = self.curated_brands
+                self.update_organizer_brand_combo()
+            self.combo_brand.setCurrentText(b)
             self.on_organizer_setting_changed()
 
     def browse_source_files(self):
@@ -2814,6 +2827,9 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     
+    start_time = datetime.datetime.now()
+    MIN_SPLASH_DURATION_SEC = 2.0
+    
     splash = None
     splash_path = SPLASH_CAT_JPG
     if os.path.exists(splash_path):
@@ -2826,14 +2842,19 @@ def main():
     initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
     window = MainWindow(initial_files=initial_files)
     
-    def on_ready_show():
+    def do_show_main():
         if splash:
             splash.close()
         window.show()
         set_dark_titlebar(int(window.winId()), window.current_theme == "dark")
 
+    def on_ready_show():
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        remaining_ms = int(max(0, (MIN_SPLASH_DURATION_SEC - elapsed) * 1000))
+        QTimer.singleShot(remaining_ms, do_show_main)
+
     window.initial_load_done.connect(on_ready_show)
-    QTimer.singleShot(2500, on_ready_show)
+    QTimer.singleShot(3500, do_show_main)
     
     sys.exit(app.exec())
 
