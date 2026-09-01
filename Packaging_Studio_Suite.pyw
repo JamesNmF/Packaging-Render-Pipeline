@@ -9,18 +9,20 @@
    - 4-Worker QThreadPool 异步图像流式解码与信号槽 (Signal/Slot) 回填；
    - 彻底绝缘假死与“未响应”，冷启动 0.05 秒瞬开。
 
-2. 🐱 萌猫开屏等待页 (Cat Splash Loader Screen)：
+2. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
+   - 🏷️ 上组：业务形态分类 (全部 / 包装 / 套盒 / 海报 / 物料)
+   - 🏢 下组：客户品牌库 (全部品牌 / 柏缇 / 森之露 / 语后 / 漱外... 动态扫描实时联动)
+   - ⏱️ 4 级资产时间阶梯排序 (Tier 1 渲染图修改时间 > Tier 2 贴图资产时间 > Tier 3 Blend文件时间 > 文件夹时间)
+
+3. 🐱 萌猫开屏等待页与 Windows 沉浸式暗黑顶栏：
    - 启动时展示萌猫开工界面，后台全量资产就绪后无缝淡入主界面；
    - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
 
-3. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
+4. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
    - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
-   - 自动生成对应 Blender 母版工程并拉起 Blender 5.2 LTS 开工；
+   - 自动绑定 E:\\zjc\\包装默认文件.blend 母版工程并拉起 Blender 5.2 LTS 开工；
    - 自动将新项目录入《产品列表.xlsx》；
    - 📊 渲染图一键双向内嵌写入 Excel 台账单元格。
-
-4. 🌿 温润工业石墨灰护眼设计 (Studio Graphite Eye-Care Dark Mode)：
-   - 对标 Blender / Lightroom / Eagle 工业级高颜值调色，支持暗灰/浅色一键切换。
 ===================================================================
 """
 
@@ -217,6 +219,23 @@ DEFAULT_FOLDER_RULES = [
     }
 ]
 
+DEFAULT_CONFIG = {
+    "workspaces": DEFAULT_WORKSPACES,
+    "current_workspace": DEFAULT_WORKSPACES[0],
+    "excel_path": DEFAULT_EXCEL_PATH if os.path.exists(DEFAULT_EXCEL_PATH) else "",
+    "curated_brands": ["柏缇", "森之露", "语后", "漱外", "零食有鸣"],
+    "current_brand": "柏缇",
+    "default_category": "包装",
+    "theme": "dark",
+    "auto_create_blend": True,
+    "auto_open_blender": True,
+    "auto_open_ai": True,
+    "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
+    "auto_append_to_excel": True,
+    "folder_rules": DEFAULT_FOLDER_RULES,
+    "active_rule_id": "standard_packaging_5stage"
+}
+
 DARK_QSS = """
 QMainWindow, QWidget {
     background-color: #18191C;
@@ -295,7 +314,7 @@ QListWidget {
     padding: 4px;
 }
 QListWidget::item {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: 6px;
     color: #9BA1B0;
     font-weight: bold;
@@ -430,7 +449,7 @@ QListWidget {
     padding: 4px;
 }
 QListWidget::item {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: 6px;
     color: #475569;
     font-weight: bold;
@@ -444,24 +463,6 @@ QListView#GalleryView {
     border: none;
 }
 """
-
-
-DEFAULT_CONFIG = {
-    "workspaces": DEFAULT_WORKSPACES,
-    "current_workspace": DEFAULT_WORKSPACES[0],
-    "excel_path": DEFAULT_EXCEL_PATH if os.path.exists(DEFAULT_EXCEL_PATH) else "",
-    "curated_brands": ["柏缇", "零食有鸣"],
-    "current_brand": "柏缇",
-    "default_category": "包装",
-    "theme": "dark",
-    "auto_create_blend": True,
-    "auto_open_blender": True,
-    "auto_open_ai": True,
-    "template_blend_path": DEFAULT_TEMPLATE if os.path.exists(DEFAULT_TEMPLATE) else "",
-    "auto_append_to_excel": True,
-    "folder_rules": DEFAULT_FOLDER_RULES,
-    "active_rule_id": "standard_packaging_5stage"
-}
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -610,10 +611,11 @@ def parse_and_cache_excel(excel_path):
             if cell.value:
                 headers[str(cell.value).strip()] = col_idx
                 
-        sku_col = headers.get("产品名称") or headers.get("SKU") or headers.get("品名") or 2
+        sku_col = headers.get("产品名称") or headers.get("SKU") or headers.get("品名") or headers.get("产品命名") or 2
         brand_col = headers.get("品牌") or headers.get("客户") or 1
         cat_col = headers.get("业务形态") or headers.get("分类") or headers.get("类别") or None
-        time_col = headers.get("创建时间") or headers.get("日期") or None
+        time_col = headers.get("创建时间") or headers.get("日期") or headers.get("录入时间") or None
+        path_col = headers.get("文件路径") or headers.get("路径") or None
         
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not row or not any(row):
@@ -624,6 +626,20 @@ def parse_and_cache_excel(excel_path):
             brand_val = str(row[brand_col - 1]).strip() if len(row) >= brand_col and row[brand_col - 1] else ""
             if brand_val == "None":
                 brand_val = ""
+            
+            p_val = str(row[path_col - 1]).strip() if path_col and len(row) >= path_col and row[path_col - 1] else ""
+            if p_val == "None":
+                p_val = ""
+                
+            # 若品牌列为空或为纯数字序号，从文件路径中反提取品牌
+            if (not brand_val or brand_val.isdigit()) and p_val:
+                norm_p = p_val.replace("\\", "/")
+                parts = [part for part in norm_p.split("/") if part]
+                if len(parts) >= 2:
+                    brand_val = parts[-2]
+            if not brand_val or brand_val.isdigit():
+                brand_val = "柏缇"
+                
             cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
             cat_val = normalize_category(cat_val)
             time_val = str(row[time_col - 1]).strip() if time_col and len(row) >= time_col and row[time_col - 1] else ""
@@ -637,7 +653,7 @@ def parse_and_cache_excel(excel_path):
                 "brand": brand_val,
                 "sku": sku_val,
                 "cat": cat_val,
-                "path": "",
+                "path": p_val,
                 "thumbnail": img_path,
                 "time": time_val,
                 "row_idx": row_idx,
@@ -652,11 +668,15 @@ def find_project_thumbnail(proj_dir):
     if not proj_dir or not os.path.exists(proj_dir):
         return None
     render_candidates = [
+        os.path.join(proj_dir, "png"),
+        os.path.join(proj_dir, "PNG"),
         os.path.join(proj_dir, "04_Renders_通道输出"),
         os.path.join(proj_dir, "04_Renders_高清分层输出"),
         os.path.join(proj_dir, "03_输出"),
         os.path.join(proj_dir, "04_输出"),
         os.path.join(proj_dir, "05_Delivery_最终交付"),
+        os.path.join(proj_dir, "05_Final_精修定稿"),
+        os.path.join(proj_dir, "渲染"),
         os.path.join(proj_dir, "Renders"),
         proj_dir
     ]
@@ -705,31 +725,116 @@ def auto_detect_category_from_name(name):
         return "物料"
     return "包装"
 
-def get_project_max_mtime_fast(proj_dir):
+# ----------------- 4 级资产真实时间阶梯算法 -----------------
+def get_project_asset_mtime(proj_dir):
+    """
+    4 级资产真实产出时间算法：
+    Tier 1 (完工渲染图): png / 04_Renders / 渲染 / 03_输出 / 05_Delivery 中的最新图片修改时间
+    Tier 2 (贴图资产与设计稿): 02_Textures / textures / 贴图 / 01_Design 中的最新图片/AI修改时间
+    Tier 3 (3D 工程): 03_3D / 模型 / .blend 最新修改时间
+    Tier 4 (保底): 根目录图片或文件夹本身创建时间
+    """
+    if not proj_dir or not os.path.exists(proj_dir):
+        return 0
     try:
-        max_m = os.path.getmtime(proj_dir)
-        with os.scandir(proj_dir) as it:
-            for entry in it:
-                if entry.name.lower() in SYSTEM_IGNORED_DIRS:
-                    continue
-                if entry.is_dir():
-                    try:
-                        dm = entry.stat().st_mtime
-                        if dm > max_m:
-                            max_m = dm
-                        with os.scandir(entry.path) as sub_it:
-                            for sub_entry in sub_it:
-                                if sub_entry.name.lower().endswith(('.blend', '.png', '.jpg', '.jpeg', '.ai', '.psd')):
-                                    sm = sub_entry.stat().st_mtime
-                                    if sm > max_m:
-                                        max_m = sm
-                    except (PermissionError, OSError):
-                        pass
-                elif entry.name.lower().endswith(('.blend', '.png', '.jpg', '.jpeg', '.ai', '.psd')):
-                    sm = entry.stat().st_mtime
-                    if sm > max_m:
-                        max_m = sm
-        return max_m
+        # Tier 1: 渲染输出图
+        render_candidates = [
+            os.path.join(proj_dir, "png"),
+            os.path.join(proj_dir, "PNG"),
+            os.path.join(proj_dir, "04_Renders_通道输出"),
+            os.path.join(proj_dir, "04_Renders_高清分层输出"),
+            os.path.join(proj_dir, "渲染"),
+            os.path.join(proj_dir, "03_输出"),
+            os.path.join(proj_dir, "04_输出"),
+            os.path.join(proj_dir, "05_Delivery_最终交付"),
+            os.path.join(proj_dir, "05_Final_精修定稿"),
+            os.path.join(proj_dir, "Renders"),
+            os.path.join(proj_dir, "renders"),
+        ]
+        img_exts = ('.png', '.jpg', '.jpeg', '.webp')
+        
+        tier1_max = 0
+        for r_dir in render_candidates:
+            if os.path.exists(r_dir) and os.path.isdir(r_dir):
+                try:
+                    with os.scandir(r_dir) as it:
+                        for entry in it:
+                            if entry.is_file() and entry.name.lower().endswith(img_exts):
+                                m = entry.stat().st_mtime
+                                if m > tier1_max:
+                                    tier1_max = m
+                except Exception:
+                    pass
+        if tier1_max > 0:
+            return tier1_max
+            
+        # Tier 2: 贴图资产与平面设计原稿 (新工程未渲染)
+        texture_candidates = [
+            os.path.join(proj_dir, "02_Textures_贴图资产"),
+            os.path.join(proj_dir, "textures"),
+            os.path.join(proj_dir, "Textures"),
+            os.path.join(proj_dir, "texture"),
+            os.path.join(proj_dir, "贴图"),
+            os.path.join(proj_dir, "贴图资产"),
+            os.path.join(proj_dir, "01_Design_平面原稿"),
+            os.path.join(proj_dir, "01_源文件"),
+            os.path.join(proj_dir, "02_Design_设计原稿"),
+        ]
+        tier2_max = 0
+        design_exts = ('.png', '.jpg', '.jpeg', '.webp', '.ai', '.psd', '.pdf')
+        for t_dir in texture_candidates:
+            if os.path.exists(t_dir) and os.path.isdir(t_dir):
+                try:
+                    with os.scandir(t_dir) as it:
+                        for entry in it:
+                            if entry.is_file() and entry.name.lower().endswith(design_exts):
+                                m = entry.stat().st_mtime
+                                if m > tier2_max:
+                                    tier2_max = m
+                except Exception:
+                    pass
+        if tier2_max > 0:
+            return tier2_max
+            
+        # Tier 3: 3D 工程文件 (.blend)
+        blend_candidates = [
+            os.path.join(proj_dir, "03_3D_三维工程"),
+            os.path.join(proj_dir, "03_3D_三维模型与场景"),
+            os.path.join(proj_dir, "02_工程"),
+            os.path.join(proj_dir, "模型"),
+            os.path.join(proj_dir, "3D"),
+            proj_dir
+        ]
+        tier3_max = 0
+        for b_dir in blend_candidates:
+            if os.path.exists(b_dir) and os.path.isdir(b_dir):
+                try:
+                    with os.scandir(b_dir) as it:
+                        for entry in it:
+                            if entry.is_file() and entry.name.lower().endswith('.blend'):
+                                m = entry.stat().st_mtime
+                                if m > tier3_max:
+                                    tier3_max = m
+                except Exception:
+                    pass
+        if tier3_max > 0:
+            return tier3_max
+            
+        # Tier 4: 根目录中的任何图片/文件时间 / 文件夹本身
+        tier4_max = 0
+        try:
+            with os.scandir(proj_dir) as it:
+                for entry in it:
+                    if entry.is_file() and entry.name.lower().endswith(('.png', '.jpg', '.jpeg', '.blend', '.ai', '.psd')):
+                        m = entry.stat().st_mtime
+                        if m > tier4_max:
+                            tier4_max = m
+        except Exception:
+            pass
+        if tier4_max > 0:
+            return tier4_max
+            
+        return os.path.getmtime(proj_dir)
     except Exception:
         return 0
 
@@ -762,7 +867,7 @@ def scan_workspace_projects_fast(ws_root, meta_cache):
             sku_p = os.path.join(brand_p, sku)
             try:
                 if os.path.isdir(sku_p):
-                    s_mtime = get_project_max_mtime_fast(sku_p)
+                    s_mtime = get_project_asset_mtime(sku_p)
                     cache_key = sku_p.lower().replace("/", "\\")
                     
                     cached_thumb = meta_cache.get(cache_key, {}).get("thumbnail")
@@ -832,12 +937,12 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
         
         item = {
             "source": "merged" if matched_dp else "excel",
-            "brand": ep.get("brand") or (matched_dp.get("brand") if matched_dp else ""),
+            "brand": ep.get("brand") or (matched_dp.get("brand") if matched_dp else "柏缇"),
             "sku": ep["sku"],
             "cat": ep.get("cat") or (matched_dp.get("cat") if matched_dp else "包装"),
             "time": ep.get("time", ""),
             "row_idx": ep.get("row_idx", 0),
-            "path": matched_dp["path"] if matched_dp else "",
+            "path": matched_dp["path"] if matched_dp else (ep.get("path") or ""),
             "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and os.path.exists(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
             "mtime": matched_dp["mtime"] if matched_dp else 0
         }
@@ -878,7 +983,7 @@ def update_thumbnail_to_excel(excel_path, proj_path, sku, thumb_path):
         sku_col = 2
         for col_idx, cell in enumerate(sheet[1], start=1):
             val = str(cell.value or "").strip()
-            if val in ("产品名称", "SKU", "品名"):
+            if val in ("产品名称", "SKU", "品名", "产品命名"):
                 sku_col = col_idx
                 break
                 
@@ -927,7 +1032,7 @@ def batch_sync_all_thumbnails_to_excel(excel_path, projects):
         sku_col = 2
         for col_idx, cell in enumerate(sheet[1], start=1):
             val = str(cell.value or "").strip()
-            if val in ("产品名称", "SKU", "品名"):
+            if val in ("产品名称", "SKU", "品名", "产品命名"):
                 sku_col = col_idx
                 break
                 
@@ -1031,14 +1136,12 @@ class CatSplashScreen(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # 居中图片区域
         self.img_lbl = QLabel()
         self.img_lbl.setAlignment(Qt.AlignCenter)
         if self.pixmap:
             self.img_lbl.setPixmap(self.pixmap)
         layout.addWidget(self.img_lbl, stretch=1)
         
-        # 底栏进度区域
         bottom_bar = QWidget()
         bottom_bar.setFixedHeight(46)
         bottom_bar.setStyleSheet("background: #18191C; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;")
@@ -1168,11 +1271,9 @@ class GalleryCardDelegate(QStyledItemDelegate):
             y_off = thumb_rect.top() + (thumb_rect.height() - scaled.height()) // 2
             painter.drawPixmap(x_off, y_off, scaled)
         else:
-            # 绘制占位符
             painter.setPen(QColor("#6B7280"))
             painter.drawText(thumb_rect, Qt.AlignCenter, "📦 待渲染工程")
             
-            # 触发后台异步解码 (零主线程阻塞)
             if img_path and img_path not in model.loading_set and os.path.exists(img_path):
                 model.loading_set.add(img_path)
                 task = ImageLoadTask(img_path)
@@ -1229,7 +1330,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
         btn1_rect = QRect(rect.left() + 10, action_y, (rect.width() - 26) // 2, 22)
         btn2_rect = QRect(btn1_rect.right() + 6, action_y, (rect.width() - 26) // 2, 22)
         
-        # 按钮 1: 文件夹
         b1_path = QPainterPath()
         b1_path.addRoundedRect(QRectF(btn1_rect), 4, 4)
         painter.fillPath(b1_path, QColor("#202227") if is_dark else QColor("#E2E8F0"))
@@ -1239,7 +1339,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
         painter.setFont(font_btn)
         painter.drawText(btn1_rect, Qt.AlignCenter, "📁 文件夹")
 
-        # 按钮 2: 3D 工程
         b2_path = QPainterPath()
         b2_path.addRoundedRect(QRectF(btn2_rect), 4, 4)
         painter.fillPath(b2_path, QColor("#2563EB"))
@@ -1284,7 +1383,6 @@ class FolderRuleManagerDialog(QDialog):
         main_layout = QVBoxLayout(self)
         splitter = QSplitter(Qt.HORIZONTAL)
         
-        # 左侧列表
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.addWidget(QLabel("<b>规则预设库</b>"))
@@ -1304,7 +1402,6 @@ class FolderRuleManagerDialog(QDialog):
         
         splitter.addWidget(left_widget)
         
-        # 右侧编辑
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         
@@ -1334,7 +1431,6 @@ class FolderRuleManagerDialog(QDialog):
         splitter.setStretchFactor(1, 3)
         main_layout.addWidget(splitter)
         
-        # 底部确定取消
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
         btn_save = QPushButton("💾 保存并应用此规则")
@@ -1441,14 +1537,14 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_files=None):
         super().__init__()
         self.setWindowTitle("美术资产中枢 - Art Asset Hub (v1.0 正式版 Qt6 GPU 加速)")
-        self.resize(1280, 850)
-        self.setMinimumSize(1020, 680)
+        self.resize(1320, 860)
+        self.setMinimumSize(1060, 680)
 
         self.cfg = load_config()
         self.meta_cache = load_meta_cache()
         self.current_theme = self.cfg.get("theme", "dark")
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "零食有鸣"])
+        self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "森之露", "语后", "漱外", "零食有鸣"])
         self.folder_rules = self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES)
         self.active_rule_id = self.cfg.get("active_rule_id", "standard_packaging_5stage")
         
@@ -1456,7 +1552,12 @@ class MainWindow(QMainWindow):
         self.disk_projects = []
         self.merged_projects = []
         self.current_display_list = []
+        
+        # 双维度过滤状态
         self.selected_category = "全部"
+        self.selected_brand = "全部"
+        self.brand_counts_map = {}
+        
         self.files_to_organize = []
         self.has_fired_initial_done = False
         
@@ -1469,7 +1570,7 @@ class MainWindow(QMainWindow):
             cached_disk.sort(key=lambda x: x.get("mtime", 0), reverse=True)
             self.disk_projects = cached_disk
             self.merged_projects = cached_disk
-            self.update_category_counts()
+            self.update_sidebar_counts()
             self.update_active_dataset()
 
         # 后台异步加载全量数据 (Qt 线程池 + 信号槽)
@@ -1539,33 +1640,45 @@ class MainWindow(QMainWindow):
         # Tab 1: 视觉资产看板
         self.tab_hub = QWidget()
         self.setup_hub_tab(self.tab_hub)
-        self.tabs.addTab(self.tab_hub, "  🖼️ 视觉资产看板 (Qt6 GPU 加速)  ")
+        self.tabs.addTab(self.tab_hub, "  🖼️ 视觉资产看板 (双维度导航 & GPU 加速)  ")
 
         # Tab 2: 设计源文件分拣与开工
         self.tab_organizer = QWidget()
         self.setup_organizer_tab(self.tab_organizer)
         self.tabs.addTab(self.tab_organizer, "  📥 设计源文件分拣与开工  ")
 
-    # ---------------- Tab 1: 视觉资产看板 ----------------
+    # ---------------- Tab 1: 视觉资产看板 (双维度侧边栏) ----------------
     def setup_hub_tab(self, parent):
         layout = QHBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # 左侧形态侧边栏
+        # 左侧「业务形态 + 客户品牌」双维度侧边栏
         sidebar = QWidget()
-        sidebar.setFixedWidth(200)
+        sidebar.setFixedWidth(220)
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(10)
+
+        # 上组：业务形态分类
         side_layout.addWidget(QLabel("<b>🏷️ 业务形态分类</b>"))
-        
         self.category_list = QListWidget()
-        cats = ["全部", "包装", "套盒", "海报", "物料"]
+        self.category_list.setFixedHeight(168)
+        cats = ["全部形态", "📦 包装", "🎁 套盒", "🖼️ 海报", "📑 物料"]
         for c in cats:
             self.category_list.addItem(f"{c} (0)")
         self.category_list.setCurrentRow(0)
         self.category_list.currentRowChanged.connect(self.on_category_changed)
         side_layout.addWidget(self.category_list)
+
+        # 下组：客户品牌库
+        side_layout.addWidget(QLabel("<b>🏢 客户与品牌库</b>"))
+        self.brand_list = QListWidget()
+        self.brand_list.addItem("全部品牌 (0)")
+        self.brand_list.setCurrentRow(0)
+        self.brand_list.currentRowChanged.connect(self.on_brand_changed)
+        side_layout.addWidget(self.brand_list, stretch=1)
+        
         layout.addWidget(sidebar)
 
         # 右侧画廊主体
@@ -1638,8 +1751,8 @@ class MainWindow(QMainWindow):
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("客户品牌:"))
         self.combo_brand = QComboBox()
-        self.combo_brand.addItems(self.curated_brands)
-        self.combo_brand.setCurrentText(self.cfg.get("current_brand", self.curated_brands[0]))
+        self.combo_brand.setEditable(True)
+        self.update_organizer_brand_combo()
         self.combo_brand.currentTextChanged.connect(self.on_organizer_setting_changed)
         btn_add_brand = QPushButton("➕")
         btn_add_brand.setFixedWidth(32)
@@ -1726,6 +1839,21 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(group3)
 
+    def update_organizer_brand_combo(self):
+        cur_brand = self.cfg.get("current_brand", "柏缇")
+        all_brands = list(self.curated_brands)
+        for b in sorted(self.brand_counts_map.keys()):
+            if b and b not in all_brands:
+                all_brands.append(b)
+        self.combo_brand.blockSignals(True)
+        self.combo_brand.clear()
+        self.combo_brand.addItems(all_brands)
+        if cur_brand in all_brands:
+            self.combo_brand.setCurrentText(cur_brand)
+        elif all_brands:
+            self.combo_brand.setCurrentIndex(0)
+        self.combo_brand.blockSignals(False)
+
     # ---------------- 业务逻辑与数据流 (Qt 线程池 + 信号槽) ----------------
     def async_load_data(self):
         self.sync_status_lbl.setText("⚡ 正在加载全量资产...")
@@ -1748,27 +1876,52 @@ class MainWindow(QMainWindow):
 
     def update_after_data_loaded(self):
         self.sync_status_lbl.setText(f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)")
-        self.update_category_counts()
+        self.update_sidebar_counts()
         self.update_active_dataset()
+        self.update_organizer_brand_combo()
 
-    def update_category_counts(self):
+    def update_sidebar_counts(self):
         mode_idx = self.view_combo.currentIndex()
         dataset = self.merged_projects if mode_idx == 0 else (self.excel_projects if mode_idx == 1 else self.disk_projects)
         
-        counts = {"全部": len(dataset), "包装": 0, "套盒": 0, "海报": 0, "物料": 0}
+        # 1. 统计业务形态数量
+        cat_counts = {"全部形态": len(dataset), "包装": 0, "套盒": 0, "海报": 0, "物料": 0}
+        brand_counts = {}
         for p in dataset:
             c = p.get("cat", "包装")
-            if c in counts:
-                counts[c] += 1
+            if c in cat_counts:
+                cat_counts[c] += 1
             else:
-                counts["包装"] += 1
+                cat_counts["包装"] += 1
                 
-        cats = ["全部", "包装", "套盒", "海报", "物料"]
-        for idx, c in enumerate(cats):
-            self.category_list.item(idx).setText(f"{c} ({counts[c]})")
+            b = p.get("brand", "").strip() or "未分类品牌"
+            brand_counts[b] = brand_counts.get(b, 0) + 1
+
+        self.brand_counts_map = brand_counts
+
+        # 刷新形态列表
+        cats = [("全部形态", "全部形态"), ("📦 包装", "包装"), ("🎁 套盒", "套盒"), ("🖼️ 海报", "海报"), ("📑 物料", "物料")]
+        for idx, (label, key) in enumerate(cats):
+            self.category_list.item(idx).setText(f"{label} ({cat_counts[key]})")
+
+        # 刷新品牌列表 (按数量降序排列)
+        cur_selected_brand = self.selected_brand
+        self.brand_list.blockSignals(True)
+        self.brand_list.clear()
+        self.brand_list.addItem(f"全部品牌 ({len(dataset)})")
+        
+        sorted_brands = sorted(brand_counts.items(), key=lambda x: x[1], reverse=True)
+        target_row = 0
+        for idx, (b_name, b_count) in enumerate(sorted_brands, start=1):
+            self.brand_list.addItem(f"{b_name} ({b_count})")
+            if b_name == cur_selected_brand:
+                target_row = idx
+
+        self.brand_list.setCurrentRow(target_row)
+        self.brand_list.blockSignals(False)
 
     def on_view_mode_changed(self):
-        self.update_category_counts()
+        self.update_sidebar_counts()
         self.update_active_dataset()
 
     def on_category_changed(self, row):
@@ -1776,6 +1929,14 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(cats):
             self.selected_category = cats[row]
             self.apply_filter()
+
+    def on_brand_changed(self, row):
+        if row == 0:
+            self.selected_brand = "全部"
+        elif row > 0 and row - 1 < len(self.brand_counts_map):
+            sorted_brands = sorted(self.brand_counts_map.items(), key=lambda x: x[1], reverse=True)
+            self.selected_brand = sorted_brands[row - 1][0]
+        self.apply_filter()
 
     def update_active_dataset(self):
         mode_idx = self.view_combo.currentIndex()
@@ -1792,12 +1953,21 @@ class MainWindow(QMainWindow):
         res = []
         for p in self.current_display_list:
             cat = p.get("cat", "包装")
+            brand = p.get("brand", "").strip() or "未分类品牌"
+            
+            # 形态过滤
             if self.selected_category != "全部" and cat != self.selected_category:
                 continue
+                
+            # 品牌过滤
+            if self.selected_brand != "全部" and brand != self.selected_brand:
+                continue
+                
+            # 关键字过滤
             if kw:
                 sku = p.get("sku", "").lower()
-                brand = p.get("brand", "").lower()
-                if kw not in sku and kw not in brand and kw not in cat.lower():
+                b_low = brand.lower()
+                if kw not in sku and kw not in b_low and kw not in cat.lower():
                     continue
             res.append(p)
         self.gallery_model.set_projects(res)
@@ -1852,12 +2022,10 @@ class MainWindow(QMainWindow):
             return path
         cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
         if sku and cur_ws and os.path.exists(cur_ws):
-            # 1. 匹配 brand/sku
             if brand:
                 cand = os.path.join(cur_ws, brand, sku)
                 if os.path.exists(cand):
                     return cand
-            # 2. 遍历一级子目录匹配
             try:
                 for entry in os.listdir(cur_ws):
                     bp = os.path.join(cur_ws, entry)
@@ -1867,7 +2035,6 @@ class MainWindow(QMainWindow):
                             return cand
             except Exception:
                 pass
-            # 3. 匹配直接路径
             cand = os.path.join(cur_ws, sku)
             if os.path.exists(cand):
                 return cand
@@ -1929,7 +2096,7 @@ class MainWindow(QMainWindow):
                     val = str(cell.value or "").strip()
                     if val in ("业务形态", "分类", "类别"):
                         cat_col = col_idx
-                    if val in ("产品名称", "SKU", "品名"):
+                    if val in ("产品名称", "SKU", "品名", "产品命名"):
                         sku_col = col_idx
                 if cat_col:
                     sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower()) if sku else ""
@@ -2086,7 +2253,7 @@ class MainWindow(QMainWindow):
             if b not in self.curated_brands:
                 self.curated_brands.append(b)
                 self.cfg["curated_brands"] = self.curated_brands
-                self.combo_brand.addItem(b)
+                self.update_organizer_brand_combo()
             self.combo_brand.setCurrentText(b)
             self.on_organizer_setting_changed()
 
@@ -2219,7 +2386,7 @@ class MainWindow(QMainWindow):
                         cat_col = None
                         for col_idx, cell in enumerate(sheet[1], start=1):
                             val = str(cell.value or "").strip()
-                            if val in ("产品名称", "SKU", "品名"):
+                            if val in ("产品名称", "SKU", "品名", "产品命名"):
                                 sku_col = col_idx
                             if val in ("品牌", "客户"):
                                 brand_col = col_idx
@@ -2302,7 +2469,6 @@ def main():
     splash_path = SPLASH_CAT_JPG
     if os.path.exists(splash_path):
         splash = CatSplashScreen(splash_path)
-        # 居中显示开屏
         screen_geo = app.primaryScreen().geometry()
         splash.move((screen_geo.width() - splash.width()) // 2, (screen_geo.height() - splash.height()) // 2)
         splash.show()
@@ -2317,10 +2483,7 @@ def main():
         window.show()
         set_dark_titlebar(int(window.winId()), window.current_theme == "dark")
 
-    # 当全量数据就绪时，关闭开屏并展示主界面
     window.initial_load_done.connect(on_ready_show)
-    
-    # 兜底超时 2 秒强制展示 (避免异常阻断)
     QTimer.singleShot(2500, on_ready_show)
     
     sys.exit(app.exec())
