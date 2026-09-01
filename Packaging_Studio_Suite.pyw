@@ -39,6 +39,7 @@ import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk, ImageDraw
+Image.MAX_IMAGE_PIXELS = None
 import openpyxl
 from openpyxl.drawing.image import Image as OpenpyxlImage
 
@@ -1264,10 +1265,16 @@ class PackagingStudioSuite:
         self.view_mode_var = tk.StringVar(value="merged")
         self.search_var = tk.StringVar()
         self.selected_category_var = tk.StringVar(value="全部")
-        self.page_size = 30
+        self.page_size = 48
         self.current_page = 0
         self.last_excel_mtime = 0
         self.search_debounce_job = None
+        
+        # 异步线程池与渲染版本管理
+        self.thumb_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.page_render_generation = 0
+        self._resize_debounce_job = None
+        self._last_cols = 0
         
         self.excel_projects = []
         self.disk_projects = []
@@ -1281,7 +1288,7 @@ class PackagingStudioSuite:
         self.load_app_icon()
         self.setup_styles()
         self.build_ui()
-        self.init_card_slots(30)
+        self.init_card_slots(48)
         self.load_all_asset_data()
         self.start_excel_auto_sync_watcher()
         
@@ -1505,7 +1512,7 @@ class PackagingStudioSuite:
         self.canvas.bind_all("<MouseWheel>", self.on_mouse_wheel)
 
     # ---------------- 卡片槽位复用池 (Widget Pool) ----------------
-    def init_card_slots(self, count=30):
+    def init_card_slots(self, count=48):
         c = self.colors
         for i in range(count):
             card = tk.Frame(
@@ -1559,6 +1566,14 @@ class PackagingStudioSuite:
                 "active_proj": None
             }
             self.card_slots.append(slot)
+            
+            # 单次绑定事件
+            btn_open.config(command=lambda s=slot: self.open_folder(s["active_proj"].get("path") if s["active_proj"] else None))
+            btn_blend.config(command=lambda s=slot: self.launch_blend(s["active_proj"].get("path") if s["active_proj"] else None))
+            for w in (card, img_lbl, title_lbl, meta_frame):
+                w.bind("<Button-1>", lambda e, s=slot: self.open_folder(s["active_proj"].get("path") if s["active_proj"] else None))
+                w.bind("<Double-1>", lambda e, s=slot: self.launch_blend(s["active_proj"].get("path") if s["active_proj"] else None))
+                w.bind("<Button-3>", lambda e, s=slot: self.show_context_menu(e, s["active_proj"]) if s["active_proj"] else None)
 
     # ---------------- 页面 2: 设计源文件分拣与开工 ----------------
     def build_organizer_ui(self, parent):
@@ -2104,15 +2119,17 @@ class PackagingStudioSuite:
 
         self.root.after(2000, self.start_excel_auto_sync_watcher)
 
-    def load_all_asset_data(self):
-        ex_path = self.excel_path_var.get().strip()
-        if os.path.exists(ex_path):
-            self.last_excel_mtime = os.path.getmtime(ex_path)
-            
-        self.excel_projects = parse_and_cache_excel(ex_path)
-        cur_ws = self.current_workspace_var.get().strip()
+    def _async_load_all_asset_data(self, ex_path, cur_ws):
+        excel_projs = parse_and_cache_excel(ex_path) if (ex_path and os.path.exists(ex_path)) else []
+        disk_projs = scan_workspace_projects_fast(cur_ws, self.meta_cache) if (cur_ws and os.path.exists(cur_ws)) else []
+        last_m = os.path.getmtime(ex_path) if (ex_path and os.path.exists(ex_path)) else 0
         
-        self.disk_projects = scan_workspace_projects_fast(cur_ws, self.meta_cache)
+        self.root.after(0, self.on_background_data_ready, excel_projs, disk_projs, last_m)
+
+    def on_background_data_ready(self, excel_projs, disk_projs, last_m=0):
+        self.last_excel_mtime = last_m
+        self.excel_projects = excel_projs
+        self.disk_projects = disk_projs
         self.merged_projects = merge_excel_and_disk_projects(self.excel_projects, self.disk_projects)
         
         self.combo_source["values"] = [
@@ -2130,6 +2147,13 @@ class PackagingStudioSuite:
             self.combo_source.current(0)
             
         self.update_active_dataset()
+        self.sync_status_lbl.config(text=f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)", bg=self.colors["status_bg"], fg=self.colors["status_fg"])
+
+    def load_all_asset_data(self):
+        ex_path = self.excel_path_var.get().strip()
+        cur_ws = self.current_workspace_var.get().strip()
+        self.sync_status_lbl.config(text="⚡ 正在后台极速加载台账与磁盘资产...", bg="#FEF3C7", fg="#B45309")
+        threading.Thread(target=self._async_load_all_asset_data, args=(ex_path, cur_ws), daemon=True).start()
 
     def on_source_change(self, event=None):
         sel_idx = self.combo_source.current()
@@ -2243,30 +2267,39 @@ class PackagingStudioSuite:
 
     def on_canvas_configure(self, event):
         self.canvas.itemconfig(self.canvas_window, width=event.width)
-        self.render_cards()
+        if self._resize_debounce_job:
+            self.root.after_cancel(self._resize_debounce_job)
+        self._resize_debounce_job = self.root.after(50, lambda: self._do_resize(event.width))
+
+    def _do_resize(self, width):
+        card_w = 210
+        cols = max(1, width // (card_w + 16))
+        if cols != self._last_cols:
+            self._last_cols = cols
+            self.render_cards()
 
     def on_mouse_wheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    def get_scaled_thumbnail(self, img_path, size=(190, 190)):
-        if not img_path or not os.path.exists(img_path):
-            return self.get_placeholder_thumbnail(size)
-            
-        cache_key = f"{img_path}_{self.current_theme}"
-        if cache_key in self.thumb_tk_cache:
-            return self.thumb_tk_cache[cache_key]
-            
+    def _async_fetch_thumbnail(self, img_path, size, cache_key, slot_idx, gen_id):
         try:
             fast_thumb_p = get_fast_disk_thumbnail_path(img_path, size)
-            if not fast_thumb_p or not os.path.exists(fast_thumb_p):
-                return self.get_placeholder_thumbnail(size)
-                
-            im = Image.open(fast_thumb_p)
-            tk_img = ImageTk.PhotoImage(im)
-            self.thumb_tk_cache[cache_key] = tk_img
-            return tk_img
+            if fast_thumb_p and os.path.exists(fast_thumb_p):
+                im = Image.open(fast_thumb_p)
+                tk_img = ImageTk.PhotoImage(im)
+                self.root.after(0, self._async_apply_thumbnail, slot_idx, tk_img, gen_id, cache_key)
         except Exception:
-            return self.get_placeholder_thumbnail(size)
+            pass
+
+    def _async_apply_thumbnail(self, slot_idx, tk_img, gen_id, cache_key):
+        if gen_id != self.page_render_generation:
+            return
+        if cache_key:
+            self.thumb_tk_cache[cache_key] = tk_img
+        if slot_idx < len(self.card_slots):
+            slot = self.card_slots[slot_idx]
+            slot["img_lbl"].config(image=tk_img)
+            slot["img_lbl"].image = tk_img
 
     def get_placeholder_thumbnail(self, size=(190, 190)):
         cache_key = f"placeholder_{self.current_theme}"
@@ -2284,6 +2317,9 @@ class PackagingStudioSuite:
 
     def render_cards(self):
         c = self.colors
+        self.page_render_generation += 1
+        gen_id = self.page_render_generation
+        
         container_width = self.canvas.winfo_width()
         if container_width < 100:
             container_width = 800
@@ -2305,9 +2341,22 @@ class PackagingStudioSuite:
                 
                 slot["card"].grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
                 
-                tk_thumb = self.get_scaled_thumbnail(proj["thumbnail"])
-                slot["img_lbl"].config(image=tk_thumb)
-                slot["img_lbl"].image = tk_thumb
+                img_path = proj.get("thumbnail")
+                if not img_path or not os.path.exists(img_path):
+                    tk_thumb = self.get_placeholder_thumbnail()
+                    slot["img_lbl"].config(image=tk_thumb)
+                    slot["img_lbl"].image = tk_thumb
+                else:
+                    cache_key = f"{img_path}_{self.current_theme}"
+                    if cache_key in self.thumb_tk_cache:
+                        tk_thumb = self.thumb_tk_cache[cache_key]
+                        slot["img_lbl"].config(image=tk_thumb)
+                        slot["img_lbl"].image = tk_thumb
+                    else:
+                        tk_thumb = self.get_placeholder_thumbnail()
+                        slot["img_lbl"].config(image=tk_thumb)
+                        slot["img_lbl"].image = tk_thumb
+                        self.thumb_executor.submit(self._async_fetch_thumbnail, img_path, (190, 190), cache_key, idx, gen_id)
                 
                 cat_val = normalize_category(proj.get("cat", "包装"))
                 bg_c, fg_c = c["cat_colors"].get(cat_val, ("#26384C", "#96C2EC"))
@@ -2323,18 +2372,10 @@ class PackagingStudioSuite:
                 slot["title_lbl"].config(text=proj["sku"])
                 
                 has_path = bool(proj.get("path") and os.path.exists(proj["path"]))
-                p = proj.get("path")
                 slot["btn_open"].config(
                     text="📁 文件夹" if has_path else "📁 未就绪",
-                    fg=c["btn_secondary_fg"] if has_path else c["fg_dim"],
-                    command=lambda p_path=p: self.open_folder(p_path)
+                    fg=c["btn_secondary_fg"] if has_path else c["fg_dim"]
                 )
-                slot["btn_blend"].config(command=lambda p_path=p: self.launch_blend(p_path))
-                
-                for w in (slot["card"], slot["img_lbl"], slot["title_lbl"], slot["meta_frame"]):
-                    w.bind("<Button-1>", lambda e, p_path=p: self.open_folder(p_path))
-                    w.bind("<Double-1>", lambda e, p_path=p: self.launch_blend(p_path))
-                    w.bind("<Button-3>", lambda e, pr=proj: self.show_context_menu(e, pr))
             else:
                 slot["active_proj"] = None
                 slot["card"].grid_remove()
