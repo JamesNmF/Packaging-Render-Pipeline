@@ -9,16 +9,22 @@
    - 4-Worker QThreadPool 异步图像流式解码与信号槽 (Signal/Slot) 回填；
    - 彻底绝缘假死与“未响应”，冷启动 0.05 秒瞬开。
 
-2. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
+2. 🏢 客户与品牌库管理系统 (Client & Brand Taxonomy Manager)：
+   - 🏷️ 客户品牌白名单库：自定义/排序核心客户品牌；
+   - 🔗 别名与系列归并映射：支持将“柏缇绿野幽香”、“柏缇防晒乳”自动归并进“柏缇”；
+   - 🚫 非品牌智能过滤黑名单：自动/手动屏蔽 Fonts、HDRI、模型库、临时文件夹等杂乱目录；
+   - 🖱️ 右键快捷菜单：支持直接在侧边栏右键重命名、归并或隐藏非品牌项。
+
+3. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
    - 🏷️ 上组：业务形态分类 (全部 / 包装 / 套盒 / 海报 / 物料)
-   - 🏢 下组：客户品牌库 (全部品牌 / 柏缇 / 森之露 / 语后 / 漱外... 动态扫描实时联动)
+   - 🏢 下组：客户品牌库 (全部品牌 / 柏缇 / 森之露 / 语后 / 漱外... 动态联动)
    - ⏱️ 4 级资产时间阶梯排序 (Tier 1 渲染图修改时间 > Tier 2 贴图资产时间 > Tier 3 Blend文件时间 > 文件夹时间)
 
-3. 🐱 萌猫开屏等待页与 Windows 沉浸式暗黑顶栏：
+4. 🐱 萌猫开屏等待页与 Windows 沉浸式暗黑顶栏：
    - 启动时展示萌猫开工界面，后台全量资产就绪后无缝淡入主界面；
    - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
 
-4. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
+5. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
    - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
    - 自动绑定 E:\\zjc\\包装默认文件.blend 母版工程并拉起 Blender 5.2 LTS 开工；
    - 自动将新项目录入《产品列表.xlsx》；
@@ -64,7 +70,7 @@ from PySide6.QtWidgets import (
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
-    QProgressBar, QSplashScreen
+    QProgressBar, QSplashScreen, QToolButton
 )
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
@@ -152,6 +158,18 @@ SYSTEM_IGNORED_DIRS = {
     'fonts', 'render  preset', 'renderraw', 'studio light hdri pack'
 }
 
+DEFAULT_IGNORED_BRANDS = [
+    "Fonts", "New(v1.5)The Lazy Motion Library", "Studio Light HDRi Pack", 
+    "render  preset", "renderraw", "temp", "通用模型", "流体test", "工作汇报",
+    "新建文件夹", "新建文件夹 (2)", "新建文件夹 (3)", "新建文件夹 (4)", "新建文件夹 (5)",
+    "洗衣液瓶型ome", "美天惠泡泡洗手液备案图", "liuq"
+]
+
+DEFAULT_BRAND_ALIASES = {
+    "柏缇绿野幽香": "柏缇",
+    "柏缇防晒乳": "柏缇"
+}
+
 VALID_CATEGORIES = ["包装", "套盒", "海报", "物料"]
 
 DEFAULT_FOLDER_RULES = [
@@ -223,7 +241,9 @@ DEFAULT_CONFIG = {
     "workspaces": DEFAULT_WORKSPACES,
     "current_workspace": DEFAULT_WORKSPACES[0],
     "excel_path": DEFAULT_EXCEL_PATH if os.path.exists(DEFAULT_EXCEL_PATH) else "",
-    "curated_brands": ["柏缇", "森之露", "语后", "漱外", "零食有鸣"],
+    "curated_brands": ["柏缇", "森之露", "语后", "漱外", "零食有鸣", "ee18", "超赞", "初见天空单包", "美天惠", "莱米可蕊", "集立秀", "优品本色", "劲购", "天滋", "jojo", "新品"],
+    "ignored_brands": DEFAULT_IGNORED_BRANDS,
+    "brand_aliases": DEFAULT_BRAND_ALIASES,
     "current_brand": "柏缇",
     "default_category": "包装",
     "theme": "dark",
@@ -284,19 +304,19 @@ QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {
 QLineEdit:focus, QComboBox:focus {
     border: 1px solid #3B82F6;
 }
-QPushButton {
+QPushButton, QToolButton {
     background-color: #282A31;
     border: 1px solid #383B44;
     border-radius: 6px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     color: #F1F3F5;
     font-weight: 600;
 }
-QPushButton:hover {
+QPushButton:hover, QToolButton:hover {
     background-color: #32353E;
     border-color: #6B7280;
 }
-QPushButton:pressed {
+QPushButton:pressed, QToolButton:pressed {
     background-color: #202227;
 }
 QPushButton#PrimaryBtn {
@@ -425,15 +445,15 @@ QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {
     padding: 6px 10px;
     color: #0F172A;
 }
-QPushButton {
+QPushButton, QToolButton {
     background-color: #FFFFFF;
     border: 1px solid #CBD5E1;
     border-radius: 6px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     color: #0F172A;
     font-weight: 600;
 }
-QPushButton:hover {
+QPushButton:hover, QToolButton:hover {
     background-color: #F8FAFC;
     border-color: #94A3B8;
 }
@@ -474,6 +494,10 @@ def load_config():
                         data[k] = v
                 if not data.get("folder_rules"):
                     data["folder_rules"] = DEFAULT_FOLDER_RULES
+                if "ignored_brands" not in data:
+                    data["ignored_brands"] = DEFAULT_IGNORED_BRANDS
+                if "brand_aliases" not in data:
+                    data["brand_aliases"] = DEFAULT_BRAND_ALIASES
                 return data
         except Exception:
             pass
@@ -597,7 +621,20 @@ def normalize_category(raw_val):
         return "物料"
     return "包装"
 
-def parse_and_cache_excel(excel_path):
+def resolve_brand_name(raw_brand, brand_aliases=None, ignored_brands=None):
+    if not raw_brand:
+        return "未分类品牌"
+    b = str(raw_brand).strip()
+    if not b or b == "None":
+        return "未分类品牌"
+        
+    aliases = brand_aliases or DEFAULT_BRAND_ALIASES
+    if b in aliases:
+        return aliases[b]
+        
+    return b
+
+def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
     if not excel_path or not os.path.exists(excel_path):
         return []
     projects = []
@@ -631,7 +668,6 @@ def parse_and_cache_excel(excel_path):
             if p_val == "None":
                 p_val = ""
                 
-            # 若品牌列为空或为纯数字序号，从文件路径中反提取品牌
             if (not brand_val or brand_val.isdigit()) and p_val:
                 norm_p = p_val.replace("\\", "/")
                 parts = [part for part in norm_p.split("/") if part]
@@ -640,6 +676,7 @@ def parse_and_cache_excel(excel_path):
             if not brand_val or brand_val.isdigit():
                 brand_val = "柏缇"
                 
+            brand_val = resolve_brand_name(brand_val, brand_aliases, ignored_brands)
             cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
             cat_val = normalize_category(cat_val)
             time_val = str(row[time_col - 1]).strip() if time_col and len(row) >= time_col and row[time_col - 1] else ""
@@ -727,17 +764,9 @@ def auto_detect_category_from_name(name):
 
 # ----------------- 4 级资产真实时间阶梯算法 -----------------
 def get_project_asset_mtime(proj_dir):
-    """
-    4 级资产真实产出时间算法：
-    Tier 1 (完工渲染图): png / 04_Renders / 渲染 / 03_输出 / 05_Delivery 中的最新图片修改时间
-    Tier 2 (贴图资产与设计稿): 02_Textures / textures / 贴图 / 01_Design 中的最新图片/AI修改时间
-    Tier 3 (3D 工程): 03_3D / 模型 / .blend 最新修改时间
-    Tier 4 (保底): 根目录图片或文件夹本身创建时间
-    """
     if not proj_dir or not os.path.exists(proj_dir):
         return 0
     try:
-        # Tier 1: 渲染输出图
         render_candidates = [
             os.path.join(proj_dir, "png"),
             os.path.join(proj_dir, "PNG"),
@@ -768,7 +797,6 @@ def get_project_asset_mtime(proj_dir):
         if tier1_max > 0:
             return tier1_max
             
-        # Tier 2: 贴图资产与平面设计原稿 (新工程未渲染)
         texture_candidates = [
             os.path.join(proj_dir, "02_Textures_贴图资产"),
             os.path.join(proj_dir, "textures"),
@@ -796,7 +824,6 @@ def get_project_asset_mtime(proj_dir):
         if tier2_max > 0:
             return tier2_max
             
-        # Tier 3: 3D 工程文件 (.blend)
         blend_candidates = [
             os.path.join(proj_dir, "03_3D_三维工程"),
             os.path.join(proj_dir, "03_3D_三维模型与场景"),
@@ -820,7 +847,6 @@ def get_project_asset_mtime(proj_dir):
         if tier3_max > 0:
             return tier3_max
             
-        # Tier 4: 根目录中的任何图片/文件时间 / 文件夹本身
         tier4_max = 0
         try:
             with os.scandir(proj_dir) as it:
@@ -838,7 +864,7 @@ def get_project_asset_mtime(proj_dir):
     except Exception:
         return 0
 
-def scan_workspace_projects_fast(ws_root, meta_cache):
+def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignored_brands=None):
     if not ws_root or not os.path.exists(ws_root):
         return []
     projects = []
@@ -861,6 +887,8 @@ def scan_workspace_projects_fast(ws_root, meta_cache):
         except (PermissionError, OSError):
             continue
             
+        final_brand = resolve_brand_name(entry, brand_aliases, ignored_brands)
+        
         for sku in skus:
             if sku.lower() in SYSTEM_IGNORED_DIRS:
                 continue
@@ -882,7 +910,8 @@ def scan_workspace_projects_fast(ws_root, meta_cache):
                         cached_item = meta_cache[cache_key]
                         projects.append({
                             "source": "disk",
-                            "brand": cached_item.get("brand", entry),
+                            "brand": final_brand,
+                            "raw_brand": entry,
                             "sku": cached_item.get("sku", sku),
                             "cat": cached_item.get("cat", auto_detect_category_from_name(sku)),
                             "path": sku_p,
@@ -894,7 +923,8 @@ def scan_workspace_projects_fast(ws_root, meta_cache):
                         thumb = find_project_thumbnail(sku_p)
                         cat = auto_detect_category_from_name(sku)
                         meta_cache[cache_key] = {
-                            "brand": entry,
+                            "brand": final_brand,
+                            "raw_brand": entry,
                             "sku": sku,
                             "cat": cat,
                             "thumbnail": thumb,
@@ -903,7 +933,8 @@ def scan_workspace_projects_fast(ws_root, meta_cache):
                         cache_dirty = True
                         projects.append({
                             "source": "disk",
-                            "brand": entry,
+                            "brand": final_brand,
+                            "raw_brand": entry,
                             "sku": sku,
                             "cat": cat,
                             "path": sku_p,
@@ -938,6 +969,7 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
         item = {
             "source": "merged" if matched_dp else "excel",
             "brand": ep.get("brand") or (matched_dp.get("brand") if matched_dp else "柏缇"),
+            "raw_brand": ep.get("brand") or (matched_dp.get("raw_brand") if matched_dp else "柏缇"),
             "sku": ep["sku"],
             "cat": ep.get("cat") or (matched_dp.get("cat") if matched_dp else "包装"),
             "time": ep.get("time", ""),
@@ -955,7 +987,8 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
         if norm_p not in matched_disk_paths:
             merged.append({
                 "source": "disk",
-                "brand": dp.get("brand", ""),
+                "brand": dp.get("brand", "未分类品牌"),
+                "raw_brand": dp.get("raw_brand", dp.get("brand", "")),
                 "sku": dp["sku"],
                 "cat": dp.get("cat", "包装"),
                 "time": "",
@@ -1104,17 +1137,19 @@ class DataLoaderSignals(QObject):
     finished = Signal(list, list, list)
 
 class DataLoaderWorker(QRunnable):
-    def __init__(self, excel_path, workspace, meta_cache):
+    def __init__(self, excel_path, workspace, meta_cache, brand_aliases=None, ignored_brands=None):
         super().__init__()
         self.excel_path = excel_path
         self.workspace = workspace
         self.meta_cache = meta_cache
+        self.brand_aliases = brand_aliases
+        self.ignored_brands = ignored_brands
         self.signals = DataLoaderSignals()
 
     def run(self):
         try:
-            excel_p = parse_and_cache_excel(self.excel_path) if (self.excel_path and os.path.exists(self.excel_path)) else []
-            disk_p = scan_workspace_projects_fast(self.workspace, self.meta_cache) if (self.workspace and os.path.exists(self.workspace)) else []
+            excel_p = parse_and_cache_excel(self.excel_path, self.brand_aliases, self.ignored_brands) if (self.excel_path and os.path.exists(self.excel_path)) else []
+            disk_p = scan_workspace_projects_fast(self.workspace, self.meta_cache, self.brand_aliases, self.ignored_brands) if (self.workspace and os.path.exists(self.workspace)) else []
             merged = merge_excel_and_disk_projects(excel_p, disk_p)
             self.signals.finished.emit(excel_p, disk_p, merged)
         except Exception:
@@ -1165,6 +1200,226 @@ class CatSplashScreen(QWidget):
 
     def set_status_text(self, text):
         self.status_lbl.setText(text)
+
+# ----------------- 🏢 客户与品牌库管理器弹窗 -----------------
+class BrandManagerDialog(QDialog):
+    def __init__(self, curated_brands, ignored_brands, brand_aliases, detected_raw_dirs, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🏢 客户与品牌库管理控制台")
+        self.resize(780, 560)
+        self.setMinimumSize(680, 480)
+        
+        self.curated_brands = list(curated_brands)
+        self.ignored_brands = list(ignored_brands)
+        self.brand_aliases = dict(brand_aliases)
+        self.detected_raw_dirs = list(detected_raw_dirs)
+        
+        self.build_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        main_layout = QVBoxLayout(self)
+        
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+        
+        # Tab 1: 常用品牌白名单
+        tab_curated = QWidget()
+        t1_layout = QHBoxLayout(tab_curated)
+        
+        self.list_curated = QListWidget()
+        for b in self.curated_brands:
+            self.list_curated.addItem(b)
+        t1_layout.addWidget(self.list_curated, stretch=1)
+        
+        t1_btns = QVBoxLayout()
+        btn_add = QPushButton("➕ 新增品牌")
+        btn_add.clicked.connect(self.add_curated_brand)
+        btn_edit = QPushButton("✏️ 重命名")
+        btn_edit.clicked.connect(self.edit_curated_brand)
+        btn_del = QPushButton("🗑️ 移除品牌")
+        btn_del.clicked.connect(self.delete_curated_brand)
+        btn_up = QPushButton("⬆️ 上移")
+        btn_up.clicked.connect(self.move_up_brand)
+        btn_down = QPushButton("⬇️ 下移")
+        btn_down.clicked.connect(self.move_down_brand)
+        
+        t1_btns.addWidget(btn_add)
+        t1_btns.addWidget(btn_edit)
+        t1_btns.addWidget(btn_del)
+        t1_btns.addSpacing(12)
+        t1_btns.addWidget(btn_up)
+        t1_btns.addWidget(btn_down)
+        t1_btns.addStretch()
+        t1_layout.addLayout(t1_btns)
+        
+        self.tabs.addTab(tab_curated, "  🏢 正式客户品牌库  ")
+        
+        # Tab 2: 别名与系列归并
+        tab_alias = QWidget()
+        t2_layout = QVBoxLayout(tab_alias)
+        t2_layout.addWidget(QLabel("<b>子系列 / 历史目录 归并到 目标品牌映射表：</b>"))
+        
+        self.table_alias = QTableWidget(0, 2)
+        self.table_alias.setHorizontalHeaderLabels(["原始目录 / 系列名", "归并到的正式品牌"])
+        self.table_alias.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table_alias.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        t2_layout.addWidget(self.table_alias)
+        
+        self.refresh_alias_table()
+        
+        t2_bar = QHBoxLayout()
+        btn_add_alias = QPushButton("➕ 添加归并映射")
+        btn_add_alias.clicked.connect(self.add_alias_mapping)
+        btn_del_alias = QPushButton("🗑️ 删除选中映射")
+        btn_del_alias.clicked.connect(self.delete_alias_mapping)
+        t2_bar.addWidget(btn_add_alias)
+        t2_bar.addWidget(btn_del_alias)
+        t2_bar.addStretch()
+        t2_layout.addLayout(t2_bar)
+        
+        self.tabs.addTab(tab_alias, "  🔗 别名与系列归并  ")
+        
+        # Tab 3: 非品牌黑名单 (已忽略目录)
+        tab_ignore = QWidget()
+        t3_layout = QVBoxLayout(tab_ignore)
+        t3_layout.addWidget(QLabel("<b>已屏蔽的非品牌目录 (如字体、HDRI环境、临时文件、模型库等):</b>"))
+        
+        self.list_ignored = QListWidget()
+        for ig in self.ignored_brands:
+            self.list_ignored.addItem(ig)
+        t3_layout.addWidget(self.list_ignored)
+        
+        t3_bar = QHBoxLayout()
+        btn_auto_detect = QPushButton("⚡ 一键智能扫描并屏蔽非品牌项")
+        btn_auto_detect.clicked.connect(self.auto_detect_ignored_folders)
+        btn_add_ignore = QPushButton("➕ 手动添加忽略目录")
+        btn_add_ignore.clicked.connect(self.add_ignored_brand)
+        btn_del_ignore = QPushButton("♻️ 恢复为品牌 (取消忽略)")
+        btn_del_ignore.clicked.connect(self.remove_ignored_brand)
+        
+        t3_bar.addWidget(btn_auto_detect)
+        t3_bar.addWidget(btn_add_ignore)
+        t3_bar.addWidget(btn_del_ignore)
+        t3_bar.addStretch()
+        t3_layout.addLayout(t3_bar)
+        
+        self.tabs.addTab(tab_ignore, "  🚫 非品牌屏蔽黑名单  ")
+        
+        # 底部确定取消
+        bottom_bar = QHBoxLayout()
+        bottom_bar.addStretch()
+        btn_save = QPushButton("💾 保存并立即生效")
+        btn_save.setObjectName("PrimaryBtn")
+        btn_save.setFixedHeight(36)
+        btn_save.clicked.connect(self.save_and_accept)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setFixedHeight(36)
+        btn_cancel.clicked.connect(self.reject)
+        bottom_bar.addWidget(btn_cancel)
+        bottom_bar.addWidget(btn_save)
+        main_layout.addLayout(bottom_bar)
+
+    def refresh_alias_table(self):
+        self.table_alias.setRowCount(0)
+        for raw, target in self.brand_aliases.items():
+            r = self.table_alias.rowCount()
+            self.table_alias.insertRow(r)
+            self.table_alias.setItem(r, 0, QTableWidgetItem(raw))
+            self.table_alias.setItem(r, 1, QTableWidgetItem(target))
+
+    def add_curated_brand(self):
+        text, ok = QInputDialog.getText(self, "新增客户品牌", "请输入新品牌名称:")
+        if ok and text.strip():
+            val = text.strip()
+            if val not in self.curated_brands:
+                self.curated_brands.append(val)
+                self.list_curated.addItem(val)
+
+    def edit_curated_brand(self):
+        row = self.list_curated.currentRow()
+        if row >= 0:
+            old_val = self.curated_brands[row]
+            text, ok = QInputDialog.getText(self, "编辑品牌名称", "修改品牌名称:", text=old_val)
+            if ok and text.strip():
+                new_val = text.strip()
+                self.curated_brands[row] = new_val
+                self.list_curated.item(row).setText(new_val)
+
+    def delete_curated_brand(self):
+        row = self.list_curated.currentRow()
+        if row >= 0:
+            del self.curated_brands[row]
+            self.list_curated.takeItem(row)
+
+    def move_up_brand(self):
+        row = self.list_curated.currentRow()
+        if row > 0:
+            self.curated_brands[row], self.curated_brands[row-1] = self.curated_brands[row-1], self.curated_brands[row]
+            item = self.list_curated.takeItem(row)
+            self.list_curated.insertItem(row-1, item)
+            self.list_curated.setCurrentRow(row-1)
+
+    def move_down_brand(self):
+        row = self.list_curated.currentRow()
+        if 0 <= row < len(self.curated_brands) - 1:
+            self.curated_brands[row], self.curated_brands[row+1] = self.curated_brands[row+1], self.curated_brands[row]
+            item = self.list_curated.takeItem(row)
+            self.list_curated.insertItem(row+1, item)
+            self.list_curated.setCurrentRow(row+1)
+
+    def add_alias_mapping(self):
+        raw, ok1 = QInputDialog.getText(self, "添加归并映射", "请输入待归并的原始目录名 (如 柏缇绿野幽香):")
+        if not (ok1 and raw.strip()):
+            return
+        target, ok2 = QInputDialog.getText(self, "目标品牌", f"将 [{raw.strip()}] 归并到哪个正式品牌？", text="柏缇")
+        if ok2 and target.strip():
+            self.brand_aliases[raw.strip()] = target.strip()
+            self.refresh_alias_table()
+
+    def delete_alias_mapping(self):
+        row = self.table_alias.currentRow()
+        if row >= 0:
+            raw_key = self.table_alias.item(row, 0).text()
+            if raw_key in self.brand_aliases:
+                del self.brand_aliases[raw_key]
+            self.refresh_alias_table()
+
+    def auto_detect_ignored_folders(self):
+        auto_patterns = [
+            'font', 'hdri', 'render', 'preset', 'raw', 'temp', 'test', '新建文件夹',
+            '模型', '汇报', 'library', 'pack', 'ome', '备案图'
+        ]
+        added_count = 0
+        for d in self.detected_raw_dirs:
+            d_low = d.lower()
+            if any(p in d_low for p in auto_patterns) or d.startswith('.'):
+                if d not in self.ignored_brands:
+                    self.ignored_brands.append(d)
+                    self.list_ignored.addItem(d)
+                    added_count += 1
+        QMessageBox.information(self, "智能识别完成", f"已成功识别并加入 {added_count} 个非品牌目录到屏蔽名单！")
+
+    def add_ignored_brand(self):
+        text, ok = QInputDialog.getText(self, "屏蔽非品牌目录", "请输入要屏蔽的目录名 (如 Fonts):")
+        if ok and text.strip():
+            val = text.strip()
+            if val not in self.ignored_brands:
+                self.ignored_brands.append(val)
+                self.list_ignored.addItem(val)
+
+    def remove_ignored_brand(self):
+        row = self.list_ignored.currentRow()
+        if row >= 0:
+            val = self.list_ignored.item(row).text()
+            self.ignored_brands.remove(val)
+            self.list_ignored.takeItem(row)
+
+    def save_and_accept(self):
+        self.accept()
 
 # ----------------- Qt 虚拟化画廊数据模型 -----------------
 class GalleryModel(QAbstractListModel):
@@ -1245,7 +1500,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
         is_hover = (option.state & QStyle.State_MouseOver)
         is_dark = (self.parent_view.window().current_theme == "dark") if hasattr(self.parent_view, "window") else True
 
-        # 1. 卡片背景与投影 (GPU Direct3D 快速绘制)
         card_bg = QColor("#282A31") if is_dark else QColor("#FFFFFF")
         border_color = QColor("#3B82F6") if is_hover else (QColor("#383B44") if is_dark else QColor("#E2E8F0"))
         
@@ -1255,7 +1509,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
         painter.setPen(QPen(border_color, 1.5 if is_hover else 1))
         painter.drawPath(path)
 
-        # 2. 缩略图区域
         thumb_rect = QRect(rect.left() + 6, rect.top() + 6, rect.width() - 12, rect.width() - 12)
         thumb_path_shape = QPainterPath()
         thumb_path_shape.addRoundedRect(QRectF(thumb_rect), 6, 6)
@@ -1280,7 +1533,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
                 task.signals.finished.connect(self.on_image_loaded)
                 self.thread_pool.start(task)
 
-        # 3. 标签行 (形态 Badge + 品牌)
         cat_val = proj.get("cat", "包装")
         brand_val = proj.get("brand", "")
         sku_val = proj.get("sku", "")
@@ -1312,7 +1564,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
             painter.setFont(font_brand)
             painter.drawText(badge_rect.right() + 6, badge_y + 13, brand_val)
 
-        # 4. SKU 标题
         title_y = badge_y + 26
         title_rect = QRect(rect.left() + 10, title_y, rect.width() - 20, 22)
         painter.setPen(QColor("#F1F3F5") if is_dark else QColor("#0F172A"))
@@ -1325,7 +1576,6 @@ class GalleryCardDelegate(QStyledItemDelegate):
         elided_title = metrics.elidedText(sku_val, Qt.ElideRight, title_rect.width())
         painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_title)
 
-        # 5. 操作底栏
         action_y = title_y + 24
         btn1_rect = QRect(rect.left() + 10, action_y, (rect.width() - 26) // 2, 22)
         btn2_rect = QRect(btn1_rect.right() + 6, action_y, (rect.width() - 26) // 2, 22)
@@ -1544,7 +1794,13 @@ class MainWindow(QMainWindow):
         self.meta_cache = load_meta_cache()
         self.current_theme = self.cfg.get("theme", "dark")
         self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
-        self.curated_brands = self.cfg.get("curated_brands", ["柏缇", "森之露", "语后", "漱外", "零食有鸣"])
+        
+        # 品牌库体系
+        self.curated_brands = self.cfg.get("curated_brands", DEFAULT_CONFIG["curated_brands"])
+        self.ignored_brands = self.cfg.get("ignored_brands", DEFAULT_IGNORED_BRANDS)
+        self.brand_aliases = self.cfg.get("brand_aliases", DEFAULT_BRAND_ALIASES)
+        self.detected_raw_dirs = []
+        
         self.folder_rules = self.cfg.get("folder_rules", DEFAULT_FOLDER_RULES)
         self.active_rule_id = self.cfg.get("active_rule_id", "standard_packaging_5stage")
         
@@ -1564,7 +1820,6 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.apply_theme()
         
-        # 0.01 秒首屏快照渲染 (无感秒开)
         cached_disk = list(self.meta_cache.values())
         if cached_disk:
             cached_disk.sort(key=lambda x: x.get("mtime", 0), reverse=True)
@@ -1573,7 +1828,6 @@ class MainWindow(QMainWindow):
             self.update_sidebar_counts()
             self.update_active_dataset()
 
-        # 后台异步加载全量数据 (Qt 线程池 + 信号槽)
         QTimer.singleShot(50, self.async_load_data)
         
         if initial_files:
@@ -1647,13 +1901,12 @@ class MainWindow(QMainWindow):
         self.setup_organizer_tab(self.tab_organizer)
         self.tabs.addTab(self.tab_organizer, "  📥 设计源文件分拣与开工  ")
 
-    # ---------------- Tab 1: 视觉资产看板 (双维度侧边栏) ----------------
+    # ---------------- Tab 1: 视觉资产看板 (双维度侧边栏 + 品牌管理) ----------------
     def setup_hub_tab(self, parent):
         layout = QHBoxLayout(parent)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # 左侧「业务形态 + 客户品牌」双维度侧边栏
         sidebar = QWidget()
         sidebar.setFixedWidth(220)
         side_layout = QVBoxLayout(sidebar)
@@ -1671,12 +1924,24 @@ class MainWindow(QMainWindow):
         self.category_list.currentRowChanged.connect(self.on_category_changed)
         side_layout.addWidget(self.category_list)
 
-        # 下组：客户品牌库
-        side_layout.addWidget(QLabel("<b>🏢 客户与品牌库</b>"))
+        # 下组：客户品牌库 (带 ⚙️ 管理按钮)
+        brand_header_box = QHBoxLayout()
+        brand_header_box.addWidget(QLabel("<b>🏢 客户与品牌库</b>"))
+        brand_header_box.addStretch()
+        
+        btn_manage_brands = QToolButton()
+        btn_manage_brands.setText("⚙️ 管理")
+        btn_manage_brands.setToolTip("管理正式品牌、子系列归并映射与屏蔽非品牌目录")
+        btn_manage_brands.clicked.connect(self.open_brand_manager)
+        brand_header_box.addWidget(btn_manage_brands)
+        side_layout.addLayout(brand_header_box)
+
         self.brand_list = QListWidget()
         self.brand_list.addItem("全部品牌 (0)")
         self.brand_list.setCurrentRow(0)
         self.brand_list.currentRowChanged.connect(self.on_brand_changed)
+        self.brand_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.brand_list.customContextMenuRequested.connect(self.show_brand_context_menu)
         side_layout.addWidget(self.brand_list, stretch=1)
         
         layout.addWidget(sidebar)
@@ -1687,7 +1952,6 @@ class MainWindow(QMainWindow):
         gal_layout.setContentsMargins(0, 0, 0, 0)
         gal_layout.setSpacing(8)
 
-        # 搜索与视图过滤条
         filter_bar = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("🔍 搜索产品 SKU / 品牌 / 类别...")
@@ -1701,7 +1965,6 @@ class MainWindow(QMainWindow):
         filter_bar.addWidget(self.view_combo, stretch=1)
         gal_layout.addLayout(filter_bar)
 
-        # 🚀 144 FPS GPU 硬件加速 QListView 虚拟化视口
         self.gallery_view = QListView()
         self.gallery_view.setObjectName("GalleryView")
         self.gallery_view.setViewMode(QListView.IconMode)
@@ -1731,7 +1994,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
-        # 面板 1: 工作盘与规则
         group1 = QGroupBox("📂 工作盘、客户、分类与归档文件夹规则")
         g1_layout = QVBoxLayout(group1)
 
@@ -1754,11 +2016,10 @@ class MainWindow(QMainWindow):
         self.combo_brand.setEditable(True)
         self.update_organizer_brand_combo()
         self.combo_brand.currentTextChanged.connect(self.on_organizer_setting_changed)
-        btn_add_brand = QPushButton("➕")
-        btn_add_brand.setFixedWidth(32)
-        btn_add_brand.clicked.connect(self.add_brand)
-        row2.addWidget(self.combo_brand)
-        row2.addWidget(btn_add_brand)
+        btn_manage_b = QPushButton("⚙️ 管理品牌库...")
+        btn_manage_b.clicked.connect(self.open_brand_manager)
+        row2.addWidget(self.combo_brand, stretch=1)
+        row2.addWidget(btn_manage_b)
 
         row2.addWidget(QLabel("业务形态:"))
         self.combo_cat = QComboBox()
@@ -1779,7 +2040,6 @@ class MainWindow(QMainWindow):
         g1_layout.addLayout(row2)
         layout.addWidget(group1)
 
-        # 面板 2: 自动化选项
         group2 = QGroupBox("⚡ 自动化开工选项")
         g2_layout = QHBoxLayout(group2)
         self.chk_ai = QCheckBox("🎨 自动打开 AI 设计原稿")
@@ -1804,7 +2064,6 @@ class MainWindow(QMainWindow):
         g2_layout.addWidget(self.chk_excel)
         layout.addWidget(group2)
 
-        # 面板 3: 待分拣列表
         group3 = QGroupBox("📥 待分拣设计源文件列表")
         g3_layout = QVBoxLayout(group3)
         
@@ -1841,9 +2100,12 @@ class MainWindow(QMainWindow):
 
     def update_organizer_brand_combo(self):
         cur_brand = self.cfg.get("current_brand", "柏缇")
-        all_brands = list(self.curated_brands)
+        all_brands = []
+        for b in self.curated_brands:
+            if b and b not in all_brands and b not in self.ignored_brands:
+                all_brands.append(b)
         for b in sorted(self.brand_counts_map.keys()):
-            if b and b not in all_brands:
+            if b and b not in all_brands and b not in self.ignored_brands and b != "未分类品牌":
                 all_brands.append(b)
         self.combo_brand.blockSignals(True)
         self.combo_brand.clear()
@@ -1854,13 +2116,98 @@ class MainWindow(QMainWindow):
             self.combo_brand.setCurrentIndex(0)
         self.combo_brand.blockSignals(False)
 
+    # ---------------- 品牌管理控制台联动 ----------------
+    def open_brand_manager(self):
+        # 实时探测磁盘原生一级目录
+        cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
+        raw_dirs = []
+        if cur_ws and os.path.exists(cur_ws):
+            try:
+                raw_dirs = [d for d in os.listdir(cur_ws) if os.path.isdir(os.path.join(cur_ws, d)) and not d.startswith('.')]
+            except Exception:
+                pass
+        self.detected_raw_dirs = raw_dirs
+
+        dlg = BrandManagerDialog(
+            self.curated_brands, self.ignored_brands, self.brand_aliases, self.detected_raw_dirs, self
+        )
+        if dlg.exec() == QDialog.Accepted:
+            self.curated_brands = dlg.curated_brands
+            self.ignored_brands = dlg.ignored_brands
+            self.brand_aliases = dlg.brand_aliases
+            
+            self.cfg["curated_brands"] = self.curated_brands
+            self.cfg["ignored_brands"] = self.ignored_brands
+            self.cfg["brand_aliases"] = self.brand_aliases
+            save_config(self.cfg)
+            
+            self.async_load_data()
+            QMessageBox.information(self, "品牌库已更新", "🎉 客户与品牌库规则已成功更新并重新加载！")
+
+    def show_brand_context_menu(self, pos):
+        item = self.brand_list.itemAt(pos)
+        if not item:
+            return
+        raw_text = item.text()
+        brand_name = raw_text.split(" (")[0].strip()
+        if brand_name == "全部品牌":
+            return
+
+        menu = QMenu(self)
+        act_open = menu.addAction(f"📁 打开 [{brand_name}] 的磁盘物理文件夹")
+        act_alias = menu.addAction(f"🔗 将 [{brand_name}] 归并到其他品牌...")
+        act_rename = menu.addAction(f"✏️ 重命名此品牌...")
+        menu.addSeparator()
+        act_ignore = menu.addAction(f"🚫 标记为非品牌并隐藏 (放入屏蔽黑名单)")
+        act_set_default = menu.addAction(f"⭐ 设为默认开工品牌")
+
+        action = menu.exec(QCursor.pos())
+        cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
+        
+        if action == act_open:
+            b_dir = os.path.join(cur_ws, brand_name)
+            if os.path.exists(b_dir):
+                os.startfile(b_dir)
+            else:
+                QMessageBox.warning(self, "提示", f"未找到该品牌的物理文件夹:\n{b_dir}")
+        elif action == act_alias:
+            target, ok = QInputDialog.getText(self, "品牌归并", f"将 [{brand_name}] 的所有项目归并到哪个正式品牌？", text="柏缇")
+            if ok and target.strip() and target.strip() != brand_name:
+                self.brand_aliases[brand_name] = target.strip()
+                self.cfg["brand_aliases"] = self.brand_aliases
+                save_config(self.cfg)
+                self.async_load_data()
+        elif action == act_rename:
+            new_name, ok = QInputDialog.getText(self, "重命名品牌", "修改品牌名称:", text=brand_name)
+            if ok and new_name.strip() and new_name.strip() != brand_name:
+                self.brand_aliases[brand_name] = new_name.strip()
+                if brand_name in self.curated_brands:
+                    idx = self.curated_brands.index(brand_name)
+                    self.curated_brands[idx] = new_name.strip()
+                    self.cfg["curated_brands"] = self.curated_brands
+                self.cfg["brand_aliases"] = self.brand_aliases
+                save_config(self.cfg)
+                self.async_load_data()
+        elif action == act_ignore:
+            if brand_name not in self.ignored_brands:
+                self.ignored_brands.append(brand_name)
+                self.cfg["ignored_brands"] = self.ignored_brands
+                save_config(self.cfg)
+                self.async_load_data()
+                QMessageBox.information(self, "已屏蔽", f"已成功将 [{brand_name}] 移入非品牌屏蔽黑名单！")
+        elif action == act_set_default:
+            self.cfg["current_brand"] = brand_name
+            save_config(self.cfg)
+            self.update_organizer_brand_combo()
+            QMessageBox.information(self, "设置成功", f"已将 [{brand_name}] 设为默认开工品牌！")
+
     # ---------------- 业务逻辑与数据流 (Qt 线程池 + 信号槽) ----------------
     def async_load_data(self):
         self.sync_status_lbl.setText("⚡ 正在加载全量资产...")
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
         
-        worker = DataLoaderWorker(ex_path, cur_ws, self.meta_cache)
+        worker = DataLoaderWorker(ex_path, cur_ws, self.meta_cache, self.brand_aliases, self.ignored_brands)
         worker.signals.finished.connect(self.on_data_loaded)
         QThreadPool.globalInstance().start(worker)
 
@@ -1884,7 +2231,6 @@ class MainWindow(QMainWindow):
         mode_idx = self.view_combo.currentIndex()
         dataset = self.merged_projects if mode_idx == 0 else (self.excel_projects if mode_idx == 1 else self.disk_projects)
         
-        # 1. 统计业务形态数量
         cat_counts = {"全部形态": len(dataset), "包装": 0, "套盒": 0, "海报": 0, "物料": 0}
         brand_counts = {}
         for p in dataset:
@@ -1894,7 +2240,13 @@ class MainWindow(QMainWindow):
             else:
                 cat_counts["包装"] += 1
                 
+            raw_b = p.get("raw_brand", p.get("brand", "")).strip()
+            # 过滤黑名单目录
+            if raw_b in self.ignored_brands:
+                continue
             b = p.get("brand", "").strip() or "未分类品牌"
+            if b in self.ignored_brands:
+                continue
             brand_counts[b] = brand_counts.get(b, 0) + 1
 
         self.brand_counts_map = brand_counts
@@ -1904,11 +2256,13 @@ class MainWindow(QMainWindow):
         for idx, (label, key) in enumerate(cats):
             self.category_list.item(idx).setText(f"{label} ({cat_counts[key]})")
 
-        # 刷新品牌列表 (按数量降序排列)
+        # 刷新品牌列表 (按数量降序排列，仅展示有效客户品牌)
         cur_selected_brand = self.selected_brand
         self.brand_list.blockSignals(True)
         self.brand_list.clear()
-        self.brand_list.addItem(f"全部品牌 ({len(dataset)})")
+        
+        total_brand_skus = sum(brand_counts.values())
+        self.brand_list.addItem(f"全部品牌 ({total_brand_skus})")
         
         sorted_brands = sorted(brand_counts.items(), key=lambda x: x[1], reverse=True)
         target_row = 0
@@ -1954,7 +2308,12 @@ class MainWindow(QMainWindow):
         for p in self.current_display_list:
             cat = p.get("cat", "包装")
             brand = p.get("brand", "").strip() or "未分类品牌"
+            raw_brand = p.get("raw_brand", brand).strip()
             
+            # 若品牌属于屏蔽目录，且用户未在搜索框明确搜索，则过滤
+            if not kw and (raw_brand in self.ignored_brands or brand in self.ignored_brands):
+                continue
+                
             # 形态过滤
             if self.selected_category != "全部" and cat != self.selected_category:
                 continue
@@ -2078,6 +2437,7 @@ class MainWindow(QMainWindow):
             else:
                 self.meta_cache[norm_p] = {
                     "brand": proj.get("brand", ""),
+                    "raw_brand": proj.get("raw_brand", ""),
                     "sku": sku,
                     "cat": new_cat,
                     "thumbnail": proj.get("thumbnail"),
@@ -2244,17 +2604,6 @@ class MainWindow(QMainWindow):
                 self.cfg["workspaces"] = self.workspaces
                 self.combo_ws.addItem(d)
             self.combo_ws.setCurrentText(d)
-            self.on_organizer_setting_changed()
-
-    def add_brand(self):
-        b, ok = QInputDialog.getText(self, "新增客户品牌", "请输入新客户品牌名称:")
-        if ok and b.strip():
-            b = b.strip()
-            if b not in self.curated_brands:
-                self.curated_brands.append(b)
-                self.cfg["curated_brands"] = self.curated_brands
-                self.update_organizer_brand_combo()
-            self.combo_brand.setCurrentText(b)
             self.on_organizer_setting_changed()
 
     def browse_source_files(self):
