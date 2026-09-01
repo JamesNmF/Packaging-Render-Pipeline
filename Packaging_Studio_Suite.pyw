@@ -43,7 +43,7 @@ from openpyxl.drawing.image import Image as OpenpyxlImage
 
 from PySide6.QtCore import (
     Qt, QSize, QRect, QRectF, QPoint, QModelIndex, QAbstractListModel,
-    QThreadPool, QRunnable, Signal, QObject, Slot, QTimer
+    QThreadPool, QRunnable, Signal, QObject, Slot, QTimer, QEvent
 )
 from PySide6.QtGui import (
     QIcon, QPixmap, QImage, QPainter, QColor, QFont, QPen, QBrush,
@@ -952,6 +952,27 @@ class ImageLoadTask(QRunnable):
         except Exception:
             pass
 
+# ----------------- 异步全量数据加载 Worker (Qt 信号槽) -----------------
+class DataLoaderSignals(QObject):
+    finished = Signal(list, list, list)
+
+class DataLoaderWorker(QRunnable):
+    def __init__(self, excel_path, workspace, meta_cache):
+        super().__init__()
+        self.excel_path = excel_path
+        self.workspace = workspace
+        self.meta_cache = meta_cache
+        self.signals = DataLoaderSignals()
+
+    def run(self):
+        try:
+            excel_p = parse_and_cache_excel(self.excel_path) if (self.excel_path and os.path.exists(self.excel_path)) else []
+            disk_p = scan_workspace_projects_fast(self.workspace, self.meta_cache) if (self.workspace and os.path.exists(self.workspace)) else []
+            merged = merge_excel_and_disk_projects(excel_p, disk_p)
+            self.signals.finished.emit(excel_p, disk_p, merged)
+        except Exception:
+            self.signals.finished.emit([], [], [])
+
 # ----------------- Qt 虚拟化画廊数据模型 -----------------
 class GalleryModel(QAbstractListModel):
     def __init__(self, parent=None):
@@ -981,17 +1002,41 @@ class GalleryModel(QAbstractListModel):
             return self.projects[row]
         return None
 
-# ----------------- Qt6 GPU 硬件加速卡片 Delegate -----------------
+# ----------------- Qt6 GPU 硬件加速卡片 Delegate (支持点击命中测试) -----------------
 class GalleryCardDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_view = parent
-        self.hover_row = -1
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(4)
 
     def sizeHint(self, option, index):
         return QSize(220, 280)
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            rect = option.rect.adjusted(6, 6, -6, -6)
+            pos = event.pos()
+            thumb_rect = QRect(rect.left() + 6, rect.top() + 6, rect.width() - 12, rect.width() - 12)
+            badge_y = thumb_rect.bottom() + 10
+            title_y = badge_y + 26
+            action_y = title_y + 24
+            btn1_rect = QRect(rect.left() + 10, action_y, (rect.width() - 26) // 2, 22)
+            btn2_rect = QRect(btn1_rect.right() + 6, action_y, (rect.width() - 26) // 2, 22)
+            
+            proj = index.data(Qt.UserRole)
+            if proj:
+                win = self.parent_view.window()
+                if btn1_rect.contains(pos):
+                    win.open_folder(proj.get("path"), sku=proj.get("sku"), brand=proj.get("brand"))
+                    return True
+                elif btn2_rect.contains(pos):
+                    win.launch_blend(proj.get("path"), sku=proj.get("sku"), brand=proj.get("brand"))
+                    return True
+                elif thumb_rect.contains(pos):
+                    win.launch_blend(proj.get("path"), sku=proj.get("sku"), brand=proj.get("brand"))
+                    return True
+        return super().editorEvent(event, model, option, index)
 
     def paint(self, painter: QPainter, option, index):
         painter.save()
@@ -1327,9 +1372,10 @@ class MainWindow(QMainWindow):
             cached_disk.sort(key=lambda x: x.get("mtime", 0), reverse=True)
             self.disk_projects = cached_disk
             self.merged_projects = cached_disk
+            self.update_category_counts()
             self.update_active_dataset()
 
-        # 后台异步加载全量数据
+        # 后台异步加载全量数据 (Qt 线程池 + 信号槽)
         QTimer.singleShot(50, self.async_load_data)
         
         if initial_files:
@@ -1577,26 +1623,22 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(group3)
 
-    # ---------------- 业务逻辑与数据流 ----------------
+    # ---------------- 业务逻辑与数据流 (Qt 线程池 + 信号槽) ----------------
     def async_load_data(self):
         self.sync_status_lbl.setText("⚡ 正在加载全量资产...")
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
         
-        def bg_task():
-            excel_p = parse_and_cache_excel(ex_path) if (ex_path and os.path.exists(ex_path)) else []
-            disk_p = scan_workspace_projects_fast(cur_ws, self.meta_cache) if (cur_ws and os.path.exists(cur_ws)) else []
-            merged = merge_excel_and_disk_projects(excel_p, disk_p)
-            return excel_p, disk_p, merged
+        worker = DataLoaderWorker(ex_path, cur_ws, self.meta_cache)
+        worker.signals.finished.connect(self.on_data_loaded)
+        QThreadPool.globalInstance().start(worker)
 
-        threading.Thread(target=lambda: self.on_data_loaded(*bg_task()), daemon=True).start()
-
+    @Slot(list, list, list)
     def on_data_loaded(self, excel_p, disk_p, merged):
         self.excel_projects = excel_p
         self.disk_projects = disk_p
         self.merged_projects = merged
-        
-        QTimer.singleShot(0, self.update_after_data_loaded)
+        self.update_after_data_loaded()
 
     def update_after_data_loaded(self):
         self.sync_status_lbl.setText(f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)")
@@ -1655,14 +1697,12 @@ class MainWindow(QMainWindow):
         self.gallery_model.set_projects(res)
 
     def on_card_clicked(self, index):
-        proj = index.data(Qt.UserRole)
-        if proj and proj.get("path"):
-            pass
+        pass
 
     def on_card_double_clicked(self, index):
         proj = index.data(Qt.UserRole)
         if proj:
-            self.launch_blend(proj.get("path"))
+            self.launch_blend(proj.get("path"), sku=proj.get("sku"), brand=proj.get("brand"))
 
     def show_gallery_context_menu(self, pos):
         index = self.gallery_view.indexAt(pos)
@@ -1675,12 +1715,15 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         p = proj.get("path", "")
         sku = proj.get("sku", "")
+        brand = proj.get("brand", "")
         
         act_folder = menu.addAction(f"📁 打开文件夹: {sku}")
         act_blend = menu.addAction("🚀 Blender 打开 3D 工程")
-        if p and os.path.exists(p):
-            menu.addAction("🎨 查看 01_Design_平面原稿", lambda: self.open_folder(os.path.join(p, "01_Design_平面原稿")))
-            menu.addAction("🖼️ 查看 04_Renders_通道输出", lambda: self.open_folder(os.path.join(p, "04_Renders_通道输出")))
+        
+        real_p = self.resolve_project_path(p, sku, brand)
+        if real_p and os.path.exists(real_p):
+            menu.addAction("🎨 查看 01_Design_平面原稿", lambda: self.open_folder(os.path.join(real_p, "01_Design_平面原稿")))
+            menu.addAction("🖼️ 查看 04_Renders_通道输出", lambda: self.open_folder(os.path.join(real_p, "04_Renders_通道输出")))
             
         menu.addSeparator()
         cat_menu = menu.addMenu(f"🏷️ 修改业务形态 (当前: {proj.get('cat', '包装')})")
@@ -1690,28 +1733,56 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         if proj.get("thumbnail") and os.path.exists(proj["thumbnail"]):
             menu.addAction("📊 将此缩略图写入 Excel 台账 (图片列)", lambda: self.sync_single_thumbnail_to_excel(proj))
-        menu.addAction("📋 复制完整物理路径", lambda: QApplication.clipboard().setText(p))
+        menu.addAction("📋 复制完整物理路径", lambda: QApplication.clipboard().setText(real_p or p))
 
         action = menu.exec(QCursor.pos())
         if action == act_folder:
-            self.open_folder(p)
+            self.open_folder(p, sku=sku, brand=brand)
         elif action == act_blend:
-            self.launch_blend(p)
+            self.launch_blend(p, sku=sku, brand=brand)
 
-    def open_folder(self, path):
+    def resolve_project_path(self, path, sku="", brand=""):
         if path and os.path.exists(path):
-            os.startfile(path)
-        else:
-            QMessageBox.warning(self, "提示", f"该项目的本地文件夹暂未找到:\n{path}")
+            return path
+        cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
+        if sku and cur_ws and os.path.exists(cur_ws):
+            # 1. 匹配 brand/sku
+            if brand:
+                cand = os.path.join(cur_ws, brand, sku)
+                if os.path.exists(cand):
+                    return cand
+            # 2. 遍历一级子目录匹配
+            try:
+                for entry in os.listdir(cur_ws):
+                    bp = os.path.join(cur_ws, entry)
+                    if os.path.isdir(bp):
+                        cand = os.path.join(bp, sku)
+                        if os.path.exists(cand):
+                            return cand
+            except Exception:
+                pass
+            # 3. 匹配直接路径
+            cand = os.path.join(cur_ws, sku)
+            if os.path.exists(cand):
+                return cand
+        return path
 
-    def launch_blend(self, proj_path):
-        if not proj_path or not os.path.exists(proj_path):
-            QMessageBox.warning(self, "提示", f"未找到该项目的本地文件夹:\n{proj_path}")
+    def open_folder(self, path, sku="", brand=""):
+        real_path = self.resolve_project_path(path, sku, brand)
+        if real_path and os.path.exists(real_path):
+            os.startfile(real_path)
+        else:
+            QMessageBox.warning(self, "提示", f"该项目的本地文件夹暂未找到:\n{path or sku}")
+
+    def launch_blend(self, proj_path, sku="", brand=""):
+        real_path = self.resolve_project_path(proj_path, sku, brand)
+        if not real_path or not os.path.exists(real_path):
+            QMessageBox.warning(self, "提示", f"未找到该项目的本地文件夹:\n{proj_path or sku}")
             return
         rule = self.get_current_folder_rule()
         blend_sub = rule.get("blend_sub", "03_3D_三维工程")
-        blend_dir = os.path.join(proj_path, blend_sub) if blend_sub else proj_path
-        target_dir = blend_dir if os.path.exists(blend_dir) else proj_path
+        blend_dir = os.path.join(real_path, blend_sub) if blend_sub else real_path
+        target_dir = blend_dir if os.path.exists(blend_dir) else real_path
         blends = glob.glob(os.path.join(target_dir, "*.blend"))
         if blends:
             blends.sort(key=lambda x: os.path.getmtime(x), reverse=True)
@@ -1721,7 +1792,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 os.startfile(chosen)
         else:
-            self.open_folder(proj_path)
+            self.open_folder(real_path)
 
     def change_project_category(self, proj, new_cat):
         sku = proj.get("sku")
