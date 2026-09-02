@@ -1,39 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-美术资产中枢 (Art Asset Hub - v1.0 正式版 Qt6 / PySide6 工业级架构)
+美术资产管理系统 (Art Asset Hub)
 ===================================================================
-【核心架构体系】：
-1. 🚀 144 FPS 满帧 GPU 硬件加速画廊 (Qt6 / PySide6 RHI Direct3D Engine)：
-   - 基于工业标准 Qt6 C++ 原生 Direct3D / OpenGL 硬件渲染引擎；
-   - 采用 QListView + QAbstractListModel + QStyledItemDelegate 虚拟化视口；
-   - 4-Worker QThreadPool 异步图像流式解码与信号槽 (Signal/Slot) 回填；
-   - 彻底绝缘假死与“未响应”，冷启动 0.05 秒瞬开。
-
-2. 🎨 纯净 Beauty 渲染成片缩略图引擎 (Strict Beauty Render Thumbnail Filter)：
-   - 严格禁止抓取 png / PNG / texture / 贴图 / 01_Design 等源文件与贴图目录；
-   - 严格过滤 clown (小丑选区图)、cryptomatte、法线、深度、AO、粗糙度、Alpha等所有通道图；
-   - 仅采纳 04_Renders_通道输出 / 05_Delivery_最终交付 / 渲染 / 03_输出 中的最终 Beauty 效果图。
-
-3. 🐱 萌猫开屏等待页 (最少 2.0 秒无缝展示) & Windows 沉浸式暗黑顶栏：
-   - 启动时全屏居中展示萌猫开屏界面，后台无论多快完成均保持至少 2.0 秒视觉享受；
-   - Windows 11/10 原生 DWM 沉浸式暗黑标题栏 (Immersive Dark Title Bar)。
-
-4. 🏢 客户与品牌库管理控制台 (Client & Brand Taxonomy Manager)：
-   - 🏷️ 客户品牌白名单库：自定义/排序核心客户品牌；
-   - 🔗 别名与系列归并映射：支持将“柏缇绿野幽香”、“柏缇防晒乳”自动归并进“柏缇”；
-   - 🚫 非品牌智能过滤黑名单：自动/手动屏蔽 Fonts、HDRI、模型库、临时文件夹等杂乱目录；
-   - 🖱️ 右键快捷菜单：支持直接在侧边栏右键重命名、归并或隐藏非品牌项。
-
-5. 🧭 「业务形态 + 客户品牌」双维度侧边导航与资产时间阶梯排序：
-   - 🏷️ 上组：业务形态分类 (全部 / 包装 / 套盒 / 海报 / 物料)
-   - 🏢 下组：客户品牌库 (全部品牌 / 柏缇 / 森之露 / 语后 / 漱外... 动态联动)
-   - ⏱️ 4 级资产时间阶梯排序 (Tier 1 渲染图修改时间 > Tier 2 贴图资产时间 > Tier 3 Blend文件时间 > 文件夹时间)
-
-6. 📥 设计源文件分拣与开工工作台 (Source Organizer & Pipeline Launcher)：
-   - ⚙️ 自定义文件夹归档规则管理器：自由新建/编辑子目录结构，内置目录树实时预览；
-   - 自动绑定 E:\\zjc\\包装默认文件.blend 母版工程并拉起 Blender 5.2 LTS 开工；
-   - 自动将新项目录入《产品列表.xlsx》；
-   - 📊 渲染图一键双向内嵌写入 Excel 台账单元格。
+主要功能模块：
+1. 资产看板：基于 Qt6/PySide6 的图像画廊与多工作盘资产检索；
+2. 效果图过滤：智能识别并展示项目的最终渲染成片；
+3. 品牌与分类管理：支持客户品牌库、别名归并与屏蔽名单管理；
+4. 归档与开工工作台：支持根据自定义规则分拣源文件、创建项目目录并拉起 Blender 开工；
+5. Excel 台账同步：支持与《产品列表.xlsx》进行项目与效果图的双向同步。
 ===================================================================
 """
 
@@ -1353,8 +1327,8 @@ class CatSplashScreen(QWidget):
         b_layout = QVBoxLayout(bottom_bar)
         b_layout.setContentsMargins(16, 6, 16, 6)
         
-        self.status_lbl = QLabel("🚀 正在极速载入美术资产中枢...")
-        self.status_lbl.setStyleSheet("color: #93C5FD; font-weight: bold; font-size: 12px;")
+        self.status_lbl = QLabel("正在载入资产数据...")
+        self.status_lbl.setStyleSheet("color: #93C5FD; font-size: 12px;")
         b_layout.addWidget(self.status_lbl)
         
         self.prog_bar = QProgressBar()
@@ -1616,7 +1590,7 @@ class GalleryModel(QAbstractListModel):
             return self.projects[row]
         return None
 
-# ----------------- Qt6 GPU 硬件加速卡片 Delegate (支持点击命中测试) -----------------
+# ----------------- 卡片 Delegate (支持点击命中测试) -----------------
 class GalleryCardDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1913,11 +1887,11 @@ class ExcelSyncWorker(QRunnable):
                     
             wb.save(self.excel_path)
             wb.close()
-            self.signals.finished.emit(True, f"🎉 批量同步成功！已成功将 {success_count} 个项目的成片效果图写入《产品列表.xlsx》！")
+            self.signals.finished.emit(True, f"同步完成：已更新 {success_count} 个项目的效果图。")
         except PermissionError:
-            self.signals.finished.emit(False, "无法保存 Excel！请先关闭正在打开《产品列表.xlsx》的 WPS 或 Excel 程序后重试。")
+            self.signals.finished.emit(False, "无法保存 Excel，请先关闭正在打开《产品列表.xlsx》的程序后重试。")
         except Exception as e:
-            self.signals.finished.emit(False, f"同步 Excel 缩略图发生异常: {str(e)}")
+            self.signals.finished.emit(False, f"同步 Excel 发生异常: {str(e)}")
 
 # ----------------- 全量资产自动填充/同步到 Excel 引擎 -----------------
 class ExcelFullFillSignals(QObject):
@@ -2111,23 +2085,23 @@ class ExcelFullFillWorker(QRunnable):
                 "images": img_count,
                 "updated": updated_count
             }
-            self.signals.finished.emit(True, stats, "全量填充同步完成！")
+            self.signals.finished.emit(True, stats, "资产填充完成。")
         except PermissionError:
-            self.signals.finished.emit(False, {}, "无法保存 Excel！请先关闭正在打开《产品列表.xlsx》的 WPS 或 Excel 程序后重试。")
+            self.signals.finished.emit(False, {}, "无法保存 Excel，请先关闭正在打开《产品列表.xlsx》的程序后重试。")
         except Exception as e:
-            self.signals.finished.emit(False, {}, f"同步发生异常: {str(e)}")
+            self.signals.finished.emit(False, {}, f"同步异常: {str(e)}")
 
-# ----------------- 全量资产自动填充 Excel 对话框 -----------------
+# ----------------- 资产自动填充 Excel 对话框 -----------------
 class ExcelFillDialog(QDialog):
-    """全量资产自动填充与同步到 Excel 控制台对话框"""
+    """资产自动填充与同步到 Excel 对话框"""
     def __init__(self, excel_path, all_projects, filtered_projects, parent=None):
         super().__init__(parent)
         self.excel_path = excel_path
         self.all_projects = all_projects
         self.filtered_projects = filtered_projects
-        self.setWindowTitle("📊 资产自动填充到 Excel 台账")
-        self.resize(580, 440)
-        self.setMinimumSize(520, 400)
+        self.setWindowTitle("填充资产到 Excel")
+        self.resize(560, 420)
+        self.setMinimumSize(500, 380)
         self.build_ui()
 
     def showEvent(self, event):
@@ -2140,36 +2114,36 @@ class ExcelFillDialog(QDialog):
         layout.setSpacing(14)
 
         # 统计卡片
-        stat_box = QGroupBox("📊 资产与表格数据盘面")
+        stat_box = QGroupBox("数据概览")
         stat_layout = QVBoxLayout(stat_box)
         lbl_info = QLabel(
             f"• <b>绑定表格</b>: {os.path.basename(self.excel_path)}<br>"
-            f"• <b>资产管理器扫描到的全量项目</b>: <span style='color:#38BDF8; font-weight:bold;'>{len(self.all_projects)}</span> 个<br>"
-            f"• <b>当前看板视图过滤项目</b>: <span style='color:#A78BFA; font-weight:bold;'>{len(self.filtered_projects)}</span> 个<br>"
-            f"<span style='color:#9BA1B0; font-size:12px;'>将自动对比磁盘资产与 Excel，智能补齐未录入的项目、分类及高清成片效果图。</span>"
+            f"• <b>全量资产项目</b>: <span style='color:#38BDF8; font-weight:bold;'>{len(self.all_projects)}</span> 个<br>"
+            f"• <b>当前视图项目</b>: <span style='color:#A78BFA; font-weight:bold;'>{len(self.filtered_projects)}</span> 个<br>"
+            f"<span style='color:#9BA1B0; font-size:12px;'>对比磁盘与 Excel，补齐未录入的项目、分类及效果图。</span>"
         )
         lbl_info.setTextFormat(Qt.RichText)
         stat_layout.addWidget(lbl_info)
         layout.addWidget(stat_box)
 
         # 同步范围
-        grp_scope = QGroupBox("🎯 同步范围")
+        grp_scope = QGroupBox("同步范围")
         scope_layout = QVBoxLayout(grp_scope)
-        self.radio_all = QRadioButton(f"全量资产项目 (全部工作盘与品牌共 {len(self.all_projects)} 个)")
+        self.radio_all = QRadioButton(f"全量资产项目 (共 {len(self.all_projects)} 个)")
         self.radio_all.setChecked(True)
-        self.radio_filtered = QRadioButton(f"仅当前视图过滤项目 (当前品牌/形态分类共 {len(self.filtered_projects)} 个)")
+        self.radio_filtered = QRadioButton(f"仅当前视图项目 (共 {len(self.filtered_projects)} 个)")
         scope_layout.addWidget(self.radio_all)
         scope_layout.addWidget(self.radio_filtered)
         layout.addWidget(grp_scope)
 
         # 填充选项
-        grp_opts = QGroupBox("⚙️ 填充与写入选项")
+        grp_opts = QGroupBox("填充选项")
         opts_layout = QVBoxLayout(grp_opts)
-        self.chk_add_missing = QCheckBox("☑️ 自动在 Excel 末尾追加录入缺失的项目（序号、品名、分类、路径、时间）")
+        self.chk_add_missing = QCheckBox("在 Excel 中补齐缺失的项目（序号、品名、分类、路径、时间）")
         self.chk_add_missing.setChecked(True)
-        self.chk_insert_imgs = QCheckBox("☑️ 自动等比例缩放并嵌入成片效果图到【图片】单元格")
+        self.chk_insert_imgs = QCheckBox("将效果图嵌入到【图片】单元格")
         self.chk_insert_imgs.setChecked(True)
-        self.chk_update_meta = QCheckBox("☑️ 自动补充/更新已有项目的分类与物理路径")
+        self.chk_update_meta = QCheckBox("更新已有项目的分类与物理路径")
         self.chk_update_meta.setChecked(True)
         opts_layout.addWidget(self.chk_add_missing)
         opts_layout.addWidget(self.chk_insert_imgs)
@@ -2177,13 +2151,13 @@ class ExcelFillDialog(QDialog):
         layout.addWidget(grp_opts)
 
         btn_box = QHBoxLayout()
-        btn_start = QPushButton("🚀 开始全自动填充同步")
+        btn_start = QPushButton("开始同步")
         btn_start.setObjectName("PrimaryBtn")
-        btn_start.setStyleSheet("background-color: #059669; color: white; font-weight: bold; font-size: 13px; padding: 10px 18px;")
+        btn_start.setStyleSheet("background-color: #059669; color: white; font-weight: bold; font-size: 13px; padding: 9px 18px;")
         btn_start.clicked.connect(self.accept)
 
         btn_cancel = QPushButton("取消")
-        btn_cancel.setStyleSheet("padding: 10px 18px;")
+        btn_cancel.setStyleSheet("padding: 9px 18px;")
         btn_cancel.clicked.connect(self.reject)
 
         btn_box.addStretch()
@@ -2558,15 +2532,15 @@ class WorkspaceHubDialog(QDialog):
 class ManualProjectCreateDialog(QDialog):
     """
     手动输入名称创建工程项目对话框：
-    支持选择工作盘、输入/选择品牌、业务形态、输入SKU品名，自动生成标准工程目录与.blend并启动Blender
+    支持选择工作盘、输入/选择品牌、业务形态、输入SKU品名，自动生成工程目录与.blend并启动Blender
     """
     project_created = Signal(dict)
 
     def __init__(self, cfg, workspaces_v2, curated_brands, ignored_brands, folder_rules, active_rule_id, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("✨ 手动新建项目工程 (输入品名快速开工)")
-        self.resize(680, 520)
-        self.setMinimumSize(580, 440)
+        self.setWindowTitle("新建项目")
+        self.resize(680, 500)
+        self.setMinimumSize(580, 420)
         self.cfg = cfg
         self.workspaces_v2 = workspaces_v2
         self.curated_brands = curated_brands
@@ -2585,7 +2559,7 @@ class ManualProjectCreateDialog(QDialog):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        title_lbl = QLabel("📁 <b>手动创建工业级标准项目脚手架</b>")
+        title_lbl = QLabel("<b>新建项目工程</b>")
         title_lbl.setStyleSheet("font-size: 14px;")
         layout.addWidget(title_lbl)
 
@@ -2649,20 +2623,20 @@ class ManualProjectCreateDialog(QDialog):
         layout.addLayout(form_layout)
 
         # 目录树实时预览
-        layout.addWidget(QLabel("📁 <b>即将生成的物理目录与工程文件预览:</b>"))
+        layout.addWidget(QLabel("<b>工程目录与文件预览:</b>"))
         self.preview_lbl = QLabel()
         self.preview_lbl.setStyleSheet("background: #141518; color: #34D399; font-family: Consolas, 'Microsoft YaHei UI'; padding: 10px; border-radius: 6px; font-size: 11px;")
         layout.addWidget(self.preview_lbl)
 
         # 自动化选项
         opts_box = QHBoxLayout()
-        self.chk_blend = QCheckBox("✨ 自动创建对应 .blend 工程")
+        self.chk_blend = QCheckBox("创建对应 .blend 工程")
         self.chk_blend.setChecked(True)
-        self.chk_open_blender = QCheckBox("🚀 立即拉起 Blender 开工")
+        self.chk_open_blender = QCheckBox("启动 Blender")
         self.chk_open_blender.setChecked(True)
-        self.chk_excel = QCheckBox("📊 录入 Excel 台账")
+        self.chk_excel = QCheckBox("录入 Excel 台账")
         self.chk_excel.setChecked(True)
-        self.chk_open_folder = QCheckBox("📂 在文件夹中打开")
+        self.chk_open_folder = QCheckBox("在文件夹中打开")
         self.chk_open_folder.setChecked(True)
 
         opts_box.addWidget(self.chk_blend)
@@ -2673,7 +2647,7 @@ class ManualProjectCreateDialog(QDialog):
 
         # 底部按钮
         btn_bar = QHBoxLayout()
-        btn_create = QPushButton("🚀 立即创建项目工程并开工")
+        btn_create = QPushButton("创建项目")
         btn_create.setObjectName("PrimaryBtn")
         btn_create.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 13px; padding: 8px 20px;")
         btn_create.clicked.connect(self.do_create_project)
@@ -2836,19 +2810,19 @@ class ManualProjectCreateDialog(QDialog):
             "cat": cat,
             "ws_path": ws_path
         })
-        QMessageBox.information(self, "创建成功", f"🎉 项目 【{brand} / {sku}】 已成功创建并初始化完成！")
+        QMessageBox.information(self, "创建成功", f"项目 【{brand} / {sku}】 创建成功。")
         self.accept()
 
-# ----------------- 关闭窗口行为确认弹窗 -----------------
+# ----------------- 关闭窗口选项弹窗 -----------------
 class CloseActionDialog(QDialog):
     """
     关闭窗口确认对话框：
-    支持选择最小化到系统托盘（后台热驻留）或彻底退出，并可记住选择
+    支持选择最小化到系统托盘或退出程序
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("⚙️ 关闭窗口选项")
-        self.setFixedSize(390, 210)
+        self.setWindowTitle("关闭窗口选项")
+        self.setFixedSize(380, 190)
         self.selected_action = "tray"
         self.remember = False
         self.build_ui()
@@ -2862,23 +2836,23 @@ class CloseActionDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(14)
 
-        lbl = QLabel("<b>您希望如何处理当前窗口？</b><br><span style='color:#9BA1B0; font-size:12px;'>最小化到系统托盘可保留后台热驻留，再次打开 0 毫秒瞬开，减少重复等待时间。</span>")
+        lbl = QLabel("<b>请选择关闭窗口时的操作：</b><br><span style='color:#9BA1B0; font-size:12px;'>最小化到系统托盘后程序仍在后台运行，点击托盘图标可快速打开。</span>")
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
-        self.chk_remember = QCheckBox("记住我的选择，下次关闭直接执行")
+        self.chk_remember = QCheckBox("记住选择，下次关闭直接执行")
         self.chk_remember.setStyleSheet("color: #CBD5E1; font-size: 12px;")
         layout.addWidget(self.chk_remember)
 
         btn_box = QHBoxLayout()
         btn_box.setSpacing(12)
         
-        btn_tray = QPushButton("📥 最小化到托盘 (推荐)")
+        btn_tray = QPushButton("最小化到托盘")
         btn_tray.setObjectName("PrimaryBtn")
         btn_tray.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 12px; padding: 8px 14px;")
         btn_tray.clicked.connect(self.choose_tray)
 
-        btn_quit = QPushButton("❌ 彻底退出程序")
+        btn_quit = QPushButton("退出程序")
         btn_quit.setStyleSheet("padding: 8px 14px; font-size: 12px;")
         btn_quit.clicked.connect(self.choose_quit)
 
@@ -2896,13 +2870,13 @@ class CloseActionDialog(QDialog):
         self.remember = self.chk_remember.isChecked()
         self.accept()
 
-# ----------------- Qt6 工业级主窗口 -----------------
+# ----------------- 主窗口 -----------------
 class MainWindow(QMainWindow):
     initial_load_done = Signal()
 
     def __init__(self, initial_files=None):
         super().__init__()
-        self.setWindowTitle("美术资产中枢 - Art Asset Hub (v1.0 正式版 Qt6 GPU 加速)")
+        self.setWindowTitle("美术资产中枢")
         self.resize(1320, 860)
         self.setMinimumSize(1060, 680)
 
@@ -2979,7 +2953,7 @@ class MainWindow(QMainWindow):
         self.tray_icon = QSystemTrayIcon(self)
         icon = QIcon(APP_ICON_PNG) if os.path.exists(APP_ICON_PNG) else QIcon(APP_ICON_ICO)
         self.tray_icon.setIcon(icon)
-        self.tray_icon.setToolTip("美术资产中枢 (Art Asset Hub) - 点击瞬时唤醒")
+        self.tray_icon.setToolTip("美术资产中枢")
 
         tray_menu = QMenu()
         act_show = tray_menu.addAction("🖼️ 显示主窗口")
@@ -2995,7 +2969,7 @@ class MainWindow(QMainWindow):
         
         tray_menu.addSeparator()
         
-        act_quit = tray_menu.addAction("❌ 彻底退出程序")
+        act_quit = tray_menu.addAction("❌ 退出程序")
         act_quit.triggered.connect(self.force_quit_app)
 
         self.tray_icon.setContextMenu(tray_menu)
@@ -3024,9 +2998,9 @@ class MainWindow(QMainWindow):
             self.cfg["close_action"] = dlg.selected_action
             self.cfg["remember_close_action"] = dlg.remember
             save_config(self.cfg)
-            act_text = "📥 最小化到系统托盘 (后台热驻留)" if dlg.selected_action == "tray" else "❌ 彻底退出程序"
-            rem_text = "（已开启记住选择）" if dlg.remember else "（下次关闭仍会询问）"
-            QMessageBox.information(self, "设置已保存", f"已成功将关闭窗口默认行为设置为：\n【{act_text}】\n{rem_text}")
+            act_text = "最小化到系统托盘" if dlg.selected_action == "tray" else "退出程序"
+            rem_text = "（已记住选择）" if dlg.remember else "（下次关闭仍会询问）"
+            QMessageBox.information(self, "设置已保存", f"已将关闭窗口默认行为设置为：【{act_text}】\n{rem_text}")
 
     def closeEvent(self, event):
         if getattr(self, "is_force_quitting", False):
@@ -3060,10 +3034,10 @@ class MainWindow(QMainWindow):
                     self.cfg["has_shown_tray_bubble"] = True
                     save_config(self.cfg)
                     self.tray_icon.showMessage(
-                        "美术资产中枢已在后台运行",
-                        "程序已最小化到系统托盘。点击托盘图标可随时 0 毫秒瞬间唤醒！",
+                        "美术资产中枢",
+                        "程序已最小化至系统托盘，点击图标可恢复显示。",
                         QSystemTrayIcon.Information,
-                        3000
+                        2500
                     )
         else:
             self.force_quit_app()
@@ -3078,17 +3052,17 @@ class MainWindow(QMainWindow):
 
         # 顶部全局导航栏
         top_bar = QHBoxLayout()
-        self.sync_status_lbl = QLabel("🟢 极速同步已就绪")
+        self.sync_status_lbl = QLabel("🟢 就绪")
         self.sync_status_lbl.setStyleSheet("background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
         
-        btn_fill_excel = QPushButton("📊 自动填充资产到 Excel")
+        btn_fill_excel = QPushButton("📊 填充资产到 Excel")
         btn_fill_excel.setObjectName("PrimaryBtn")
         btn_fill_excel.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
-        btn_fill_excel.setToolTip("对比磁盘资产与 Excel，将资产管理器中的全部项目、分类及成片效果图一键自动填充录入到 Excel")
+        btn_fill_excel.setToolTip("对比磁盘资产与 Excel，自动补齐未录入的项目、分类及效果图")
         btn_fill_excel.clicked.connect(self.open_excel_fill_dialog)
 
-        btn_sync_excel = QPushButton("📤 仅更新效果图")
-        btn_sync_excel.setToolTip("仅将成片缩略图写入 Excel 中已有的对应行")
+        btn_sync_excel = QPushButton("📤 更新 Excel 效果图")
+        btn_sync_excel.setToolTip("将成片效果图写入 Excel 对应行")
         btn_sync_excel.clicked.connect(self.sync_all_thumbnails_to_excel)
 
         btn_bind_excel = QPushButton("📁 绑定 Excel...")
@@ -3100,7 +3074,7 @@ class MainWindow(QMainWindow):
         self.btn_theme = QPushButton("🌙 护眼暗灰")
         self.btn_theme.clicked.connect(self.toggle_theme)
         btn_settings = QPushButton("⚙️ 设置")
-        btn_settings.setToolTip("设置关闭窗口时的默认行为（最小化到托盘/彻底退出）")
+        btn_settings.setToolTip("设置关闭窗口时的默认行为（最小化到托盘/退出程序）")
         btn_settings.clicked.connect(self.configure_close_action)
 
         top_bar.addWidget(self.sync_status_lbl)
@@ -3121,12 +3095,12 @@ class MainWindow(QMainWindow):
         # Tab 1: 视觉资产看板
         self.tab_hub = QWidget()
         self.setup_hub_tab(self.tab_hub)
-        self.tabs.addTab(self.tab_hub, "  🖼️ 视觉资产看板 (双维度导航 & GPU 加速)  ")
+        self.tabs.addTab(self.tab_hub, "  🖼️ 资产看板  ")
 
         # Tab 2: 设计源文件分拣与开工
         self.tab_organizer = QWidget()
         self.setup_organizer_tab(self.tab_organizer)
-        self.tabs.addTab(self.tab_organizer, "  📥 设计源文件分拣与开工  ")
+        self.tabs.addTab(self.tab_organizer, "  📥 文件分拣与开工  ")
 
     # ---------------- Tab 1: 视觉资产看板 ----------------
     def setup_hub_tab(self, parent):
@@ -3248,14 +3222,14 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
-        group1 = QGroupBox("📂 工作盘、客户、分类与归档文件夹规则")
+        group1 = QGroupBox("工作盘与归档规则")
         g1_layout = QVBoxLayout(group1)
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("主工作盘:"))
         self.combo_ws = QComboBox()
         self.combo_ws.currentTextChanged.connect(self.on_organizer_setting_changed)
-        btn_add_ws = QPushButton("🗄️ 工作盘管理...")
+        btn_add_ws = QPushButton("工作盘管理...")
         btn_add_ws.clicked.connect(self.open_workspace_manager)
         row1.addWidget(self.combo_ws, stretch=1)
         row1.addWidget(btn_add_ws)
@@ -3267,7 +3241,7 @@ class MainWindow(QMainWindow):
         self.combo_brand.setEditable(True)
         self.update_organizer_brand_combo()
         self.combo_brand.currentTextChanged.connect(self.on_organizer_setting_changed)
-        btn_manage_b = QPushButton("⚙️ 管理品牌库...")
+        btn_manage_b = QPushButton("管理品牌库...")
         btn_manage_b.clicked.connect(self.open_brand_manager)
         row2.addWidget(self.combo_brand, stretch=1)
         row2.addWidget(btn_manage_b)
@@ -3279,33 +3253,33 @@ class MainWindow(QMainWindow):
         self.combo_cat.currentTextChanged.connect(self.on_organizer_setting_changed)
         row2.addWidget(self.combo_cat)
 
-        row2.addWidget(QLabel("📁 归档规则:"))
+        row2.addWidget(QLabel("归档规则:"))
         self.combo_rule = QComboBox()
         self.combo_rule.addItems([r["name"] for r in self.folder_rules])
         self.update_rule_combo_selection()
         self.combo_rule.currentIndexChanged.connect(self.on_rule_combo_changed)
-        btn_custom_rule = QPushButton("⚙️ 自定义规则...")
+        btn_custom_rule = QPushButton("归档规则设置...")
         btn_custom_rule.clicked.connect(self.open_rule_manager)
         row2.addWidget(self.combo_rule, stretch=1)
         row2.addWidget(btn_custom_rule)
         g1_layout.addLayout(row2)
         layout.addWidget(group1)
 
-        group2 = QGroupBox("⚡ 自动化开工选项")
+        group2 = QGroupBox("开工选项")
         g2_layout = QHBoxLayout(group2)
-        self.chk_ai = QCheckBox("🎨 自动打开 AI 设计原稿")
+        self.chk_ai = QCheckBox("打开 AI 原稿")
         self.chk_ai.setChecked(self.cfg.get("auto_open_ai", True))
         self.chk_ai.stateChanged.connect(self.on_organizer_setting_changed)
         
-        self.chk_blend = QCheckBox("✨ 自动生成对应 .blend 工程")
+        self.chk_blend = QCheckBox("创建 .blend 工程")
         self.chk_blend.setChecked(self.cfg.get("auto_create_blend", True))
         self.chk_blend.stateChanged.connect(self.on_organizer_setting_changed)
 
-        self.chk_open_blend = QCheckBox("🚀 自动启动 Blender")
+        self.chk_open_blend = QCheckBox("启动 Blender")
         self.chk_open_blend.setChecked(self.cfg.get("auto_open_blender", True))
         self.chk_open_blend.stateChanged.connect(self.on_organizer_setting_changed)
 
-        self.chk_excel = QCheckBox("📊 自动录入 Excel")
+        self.chk_excel = QCheckBox("录入 Excel")
         self.chk_excel.setChecked(self.cfg.get("auto_append_to_excel", True))
         self.chk_excel.stateChanged.connect(self.on_organizer_setting_changed)
 
@@ -3315,25 +3289,25 @@ class MainWindow(QMainWindow):
         g2_layout.addWidget(self.chk_excel)
         layout.addWidget(group2)
 
-        group3 = QGroupBox("📥 待分拣设计源文件列表")
+        group3 = QGroupBox("待分拣文件列表")
         g3_layout = QVBoxLayout(group3)
         
         tools_layout = QHBoxLayout()
-        btn_manual_create = QPushButton("✨ 手动新建项目...")
+        btn_manual_create = QPushButton("新建项目...")
         btn_manual_create.setObjectName("PrimaryBtn")
-        btn_manual_create.setToolTip("手动输入品名、选择品牌与形态，立即生成标准工程并开工")
+        btn_manual_create.setToolTip("输入品名、选择品牌与分类，直接生成工程目录并打开")
         btn_manual_create.clicked.connect(self.open_manual_project_create_dialog)
 
-        btn_add_files = QPushButton("➕ 添加设计源文件...")
+        btn_add_files = QPushButton("➕ 添加源文件...")
         btn_add_files.clicked.connect(self.browse_source_files)
 
-        btn_add_manual_item = QPushButton("✏️ 手动输入品名...")
-        btn_add_manual_item.setToolTip("手动输入一个或多个品名，添加到下方待分拣列表")
+        btn_add_manual_item = QPushButton("✏️ 输入品名...")
+        btn_add_manual_item.setToolTip("输入一个或多个品名，添加到待分拣列表")
         btn_add_manual_item.clicked.connect(self.add_manual_sku_to_organizer)
 
-        btn_clear = QPushButton("🗑️ 清空列表")
+        btn_clear = QPushButton("清空列表")
         btn_clear.clicked.connect(self.clear_source_files)
-        btn_install_jsx = QPushButton("🛠️ 一键将导出脚本注入 Illustrator")
+        btn_install_jsx = QPushButton("安装 Illustrator 导出脚本")
         btn_install_jsx.clicked.connect(self.install_ai_jsx_script)
         
         tools_layout.addWidget(btn_manual_create)
@@ -3351,10 +3325,10 @@ class MainWindow(QMainWindow):
         self.table_files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         g3_layout.addWidget(self.table_files)
 
-        btn_start_flow = QPushButton("🚀 一键分拣归档并拉起 Blender 开工")
+        btn_start_flow = QPushButton("分拣归档并打开 Blender")
         btn_start_flow.setObjectName("PrimaryBtn")
-        btn_start_flow.setFixedHeight(44)
-        btn_start_flow.setStyleSheet("font-size: 15px; font-weight: bold;")
+        btn_start_flow.setFixedHeight(40)
+        btn_start_flow.setStyleSheet("font-size: 14px; font-weight: bold;")
         btn_start_flow.clicked.connect(self.execute_organize_flow)
         g3_layout.addWidget(btn_start_flow)
 
@@ -3455,12 +3429,12 @@ class MainWindow(QMainWindow):
                 self.cfg["ignored_brands"] = self.ignored_brands
                 save_config(self.cfg)
                 self.async_load_data()
-                QMessageBox.information(self, "已屏蔽", f"已成功将 [{brand_name}] 移入非品牌屏蔽黑名单！")
+                QMessageBox.information(self, "已屏蔽", f"已将 [{brand_name}] 移入非品牌屏蔽名单。")
         elif action == act_set_default:
             self.cfg["current_brand"] = brand_name
             save_config(self.cfg)
             self.update_organizer_brand_combo()
-            QMessageBox.information(self, "设置成功", f"已将 [{brand_name}] 设为默认开工品牌！")
+            QMessageBox.information(self, "设置成功", f"已将 [{brand_name}] 设为默认品牌。")
 
     # ---------------- 工作盘空间多维管理与联动 ----------------
     def open_workspace_manager(self):
@@ -3483,7 +3457,7 @@ class MainWindow(QMainWindow):
         self.ws_combo.clear()
         
         total_projs = len(self.merged_projects)
-        self.ws_combo.addItem(f"🌐 全部工作盘 (全景联合 - {total_projs})", "")
+        self.ws_combo.addItem(f"🌐 全部工作盘 ({total_projs})", "")
         
         target_idx = 0
         for idx, ws in enumerate(self.workspaces_v2, start=1):
@@ -3523,13 +3497,12 @@ class MainWindow(QMainWindow):
         self.combo_ws.blockSignals(False)
 
     def get_current_organizer_workspace(self):
-        """准确获取当前分拣选中的物理工作盘根路径"""
+        """获取当前分拣选中的工作盘根路径"""
         if hasattr(self, "combo_ws"):
             data = self.combo_ws.currentData()
             if data and isinstance(data, str) and os.path.exists(data):
                 return os.path.normpath(data)
             txt = self.combo_ws.currentText()
-            # 尝试从形如 "⭐ 主力生产盘 (E:\zjc)" 中提取括号里的路径
             m = re.search(r'\((.*?)\)', txt)
             if m and os.path.exists(m.group(1).strip()):
                 return os.path.normpath(m.group(1).strip())
@@ -3550,7 +3523,7 @@ class MainWindow(QMainWindow):
 
     # ---------------- 业务逻辑与数据流 (Qt 线程池 + 信号槽) ----------------
     def async_load_data(self):
-        self.sync_status_lbl.setText("⚡ 正在加载全量工作盘资产...")
+        self.sync_status_lbl.setText("正在载入资产...")
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         
         worker = DataLoaderWorker(ex_path, self.workspaces_v2, self.meta_cache, self.brand_aliases, self.ignored_brands)
@@ -3568,7 +3541,7 @@ class MainWindow(QMainWindow):
             self.initial_load_done.emit()
 
     def update_after_data_loaded(self):
-        self.sync_status_lbl.setText(f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)")
+        self.sync_status_lbl.setText(f"🟢 就绪 (已载入 {len(self.merged_projects)} 个项目)")
         self.update_workspace_filter_combo()
         self.update_sidebar_counts()
         self.update_active_dataset()
@@ -3883,8 +3856,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "同步失败", "该项目暂无有效的成片渲染缩略图！")
             return
             
-        progress = QProgressDialog("正在将缩略图写入 Excel 台账...", "取消", 0, 1, self)
-        progress.setWindowTitle("📊 缩略图写入 Excel")
+        progress = QProgressDialog("正在将效果图写入 Excel...", "取消", 0, 1, self)
+        progress.setWindowTitle("写入 Excel")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -3894,7 +3867,7 @@ class MainWindow(QMainWindow):
         def on_finished(ok, msg):
             progress.close()
             if ok:
-                QMessageBox.information(self, "同步成功", f"🎉 已成功将 [{proj.get('sku')}] 的成片缩略图写入 Excel 台账！")
+                QMessageBox.information(self, "同步成功", f"已将 [{proj.get('sku')}] 的效果图写入 Excel。")
             else:
                 QMessageBox.warning(self, "同步失败", msg)
                 
@@ -3903,7 +3876,7 @@ class MainWindow(QMainWindow):
         self.thread_pool.start(worker)
 
     def open_excel_fill_dialog(self):
-        """打开全量资产自动填充与同步到 Excel 控制台"""
+        """打开资产自动填充与同步到 Excel 对话框"""
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         if not ex_path or not os.path.exists(ex_path):
             QMessageBox.warning(self, "未找到 Excel", "未找到绑定的《产品列表.xlsx》台账文件！\n请先点击【📁 绑定 Excel...】进行绑定。")
@@ -3920,8 +3893,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "所选范围内没有找到任何资产项目！")
             return
 
-        progress = QProgressDialog("正在准备全自动填充资产到 Excel...", "取消", 0, total, self)
-        progress.setWindowTitle("📊 资产全量填充 Excel")
+        progress = QProgressDialog("正在填充资产到 Excel...", "取消", 0, total, self)
+        progress.setWindowTitle("填充资产到 Excel")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -3939,18 +3912,18 @@ class MainWindow(QMainWindow):
                 tot = stats.get("total", 0)
                 
                 info_text = (
-                    f"🎉 <b>资产全量填充与同步成功！</b><br><br>"
+                    f"<b>资产数据已成功同步到 Excel。</b><br><br>"
                     f"• <b>处理资产总数</b>: {tot} 个<br>"
-                    f"• <b>新增录入到 Excel 项目</b>: <span style='color:#34D399; font-weight:bold;'>{added}</span> 个<br>"
-                    f"• <b>成功嵌入成片效果图</b>: <span style='color:#38BDF8; font-weight:bold;'>{imgs}</span> 张<br>"
-                    f"• <b>补齐分类/路径信息</b>: {upd} 个<br><br>"
-                    f"是否立即打开 Excel 表格查看？"
+                    f"• <b>新增录入项目</b>: <span style='color:#34D399; font-weight:bold;'>{added}</span> 个<br>"
+                    f"• <b>嵌入效果图</b>: <span style='color:#38BDF8; font-weight:bold;'>{imgs}</span> 张<br>"
+                    f"• <b>补齐分类/路径</b>: {upd} 个<br><br>"
+                    f"是否立即打开 Excel 查看？"
                 )
                 box = QMessageBox(self)
                 box.setWindowTitle("同步完成")
                 box.setText(info_text)
                 box.setTextFormat(Qt.RichText)
-                btn_open_excel = box.addButton("📂 打开 Excel 查看", QMessageBox.AcceptRole)
+                btn_open_excel = box.addButton("打开 Excel 查看", QMessageBox.AcceptRole)
                 box.addButton("关闭", QMessageBox.RejectRole)
                 box.exec()
                 if box.clickedButton() == btn_open_excel:
@@ -3978,8 +3951,8 @@ class MainWindow(QMainWindow):
             return
             
         total = len(valid_items)
-        progress = QProgressDialog("正在准备同步缩略图到 Excel...", "取消", 0, total, self)
-        progress.setWindowTitle("📊 批量同步缩略图到 Excel")
+        progress = QProgressDialog("正在同步效果图到 Excel...", "取消", 0, total, self)
+        progress.setWindowTitle("同步效果图到 Excel")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -4359,7 +4332,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
                 
-        QMessageBox.information(self, "开工成功", f"🎉 已成功分拣归档并初始化 {created_count} 个工程项目！\n已就绪并打开首个工程目录。")
+        QMessageBox.information(self, "分拣完成", f"已成功分拣归档 {created_count} 个项目。")
 
     def install_ai_jsx_script(self):
         src_jsx = os.path.join(os.path.dirname(__file__), "Export_Artboards_To_Textures.jsx")
@@ -4388,20 +4361,20 @@ class MainWindow(QMainWindow):
         installed = []
         for td in target_dirs:
             try:
-                dest = os.path.join(td, "🚀一键导出画板到贴图目录.jsx")
+                dest = os.path.join(td, "导出画板到贴图目录.jsx")
                 shutil.copy2(src_jsx, dest)
                 installed.append(dest)
             except Exception:
                 pass
                 
         if installed:
-            QMessageBox.information(self, "安装成功", f"🎉 已成功将贴图导出脚本注入 Illustrator！\n\n已安装到:\n{installed[0]}")
+            QMessageBox.information(self, "安装成功", f"Illustrator 导出脚本已安装到:\n{installed[0]}")
         else:
             dest_dir = QFileDialog.getExistingDirectory(self, "选择 Illustrator 的 Presets/zh_CN/脚本 目录")
             if dest_dir:
                 try:
-                    shutil.copy2(src_jsx, os.path.join(dest_dir, "🚀一键导出画板到贴图目录.jsx"))
-                    QMessageBox.information(self, "安装成功", "🎉 已成功安装到指定的脚本目录！")
+                    shutil.copy2(src_jsx, os.path.join(dest_dir, "导出画板到贴图目录.jsx"))
+                    QMessageBox.information(self, "安装成功", "已成功安装到指定的脚本目录。")
                 except Exception as e:
                     QMessageBox.warning(self, "安装失败", str(e))
 
@@ -4410,7 +4383,7 @@ def main():
     app.setStyle("Fusion")
     app.setQuitOnLastWindowClosed(False)
 
-    # ---------------- 单实例互斥检测与后台瞬时唤醒 ----------------
+    # ---------------- 单实例互斥检测与后台唤醒 ----------------
     ipc_socket = QLocalSocket()
     ipc_socket.connectToServer(IPC_SERVER_KEY)
     if ipc_socket.waitForConnected(300):
@@ -4422,7 +4395,7 @@ def main():
         ipc_socket.waitForBytesWritten(1000)
         ipc_socket.disconnectFromServer()
         
-        # 立即关闭 Native Splash 并极速退出当前重复启动的进程
+        # 立即关闭 Native Splash 并退出当前重复启动的进程
         if pyi_splash is not None:
             try:
                 pyi_splash.close()
@@ -4448,7 +4421,6 @@ def main():
 
     splash = None
     if not has_native_splash:
-        # 如果未通过 PyInstaller 原生 Splash 启动（如直接 Python 调试运行），使用 Qt CatSplashScreen
         splash_path = SPLASH_CAT_JPG
         if os.path.exists(splash_path):
             splash = CatSplashScreen(splash_path)
@@ -4458,13 +4430,13 @@ def main():
             splash.show()
             app.processEvents()
 
-    # 双锁门：最少 2000ms + 数据完全加载，二者同时满足才关闭 Splash
+    # 最少 2000ms + 数据完全加载，二者同时满足才关闭 Splash
     _timer_done = [False]
     _data_done  = [False]
     _window     = [None]
 
     def do_show_main():
-        """两把锁都开了才执行：关闭 Splash 并显示主窗口"""
+        """关闭 Splash 并显示主窗口"""
         if not (_timer_done[0] and _data_done[0]):
             return
 
@@ -4479,7 +4451,7 @@ def main():
         if splash:
             splash.close()
 
-        # 3. 展示主窗口并设置 Windows 沉浸式暗黑顶栏
+        # 3. 展示主窗口
         win = _window[0]
         if win:
             win.show()
@@ -4497,7 +4469,6 @@ def main():
         initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
         win = MainWindow(initial_files=initial_files)
         _window[0] = win
-        # 数据加载完毕信号 → 开锁 2
         win.initial_load_done.connect(on_data_ready)
 
     # 监听后续新启动实例的唤醒请求
@@ -4517,20 +4488,19 @@ def main():
                     pass
             client.disconnectFromServer()
             
-            # 无论当前主窗口是在托盘最小化还是被遮挡，0 毫秒立即唤醒并置顶！
             win = _window[0]
             if win:
                 win.show_main_window()
 
     ipc_server.newConnection.connect(on_ipc_wakeup_connection)
 
-    # 固定 2000ms 最少等待 → 开锁 1（无论数据多快加载完毕都要看满 2 秒）
+    # 预留加载平滑过渡
     QTimer.singleShot(2000, on_timer_done)
 
-    # 延迟 50ms 创建主窗口（让事件循环先稳定）
+    # 延迟 50ms 创建主窗口
     QTimer.singleShot(50, create_main_window)
 
-    # 终极兜底：6 秒后强制显示，防止信号异常丢失
+    # 超时兜底：6 秒后强制显示主窗口
     def force_show():
         _timer_done[0] = True
         _data_done[0]  = True
