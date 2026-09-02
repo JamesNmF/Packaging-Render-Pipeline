@@ -2751,6 +2751,7 @@ class MainWindow(QMainWindow):
         remember = self.cfg.get("remember_close_action", False)
         action = self.cfg.get("close_action", "")
 
+        # 如果未记住选择，或者 action 不明确，必定弹出对话框询问
         if not remember or action not in ("tray", "quit"):
             dlg = CloseActionDialog(self)
             if dlg.exec() != QDialog.Accepted:
@@ -2762,16 +2763,17 @@ class MainWindow(QMainWindow):
                 self.cfg["remember_close_action"] = True
                 save_config(self.cfg)
             else:
+                self.cfg["close_action"] = ""
                 self.cfg["remember_close_action"] = False
                 save_config(self.cfg)
 
         if action == "tray":
             event.ignore()
             self.hide()
-            if not self.cfg.get("has_shown_tray_bubble", False):
-                self.cfg["has_shown_tray_bubble"] = True
-                save_config(self.cfg)
-                if hasattr(self, "tray_icon") and self.tray_icon.isVisible():
+            if hasattr(self, "tray_icon") and self.tray_icon.isVisible():
+                if not self.cfg.get("has_shown_tray_bubble", False):
+                    self.cfg["has_shown_tray_bubble"] = True
+                    save_config(self.cfg)
                     self.tray_icon.showMessage(
                         "美术资产中枢已在后台运行",
                         "程序已最小化到系统托盘。点击托盘图标可随时 0 毫秒瞬间唤醒！",
@@ -4048,6 +4050,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setQuitOnLastWindowClosed(False)
 
     # ---------------- 单实例互斥检测与后台瞬时唤醒 ----------------
     ipc_socket = QLocalSocket()
