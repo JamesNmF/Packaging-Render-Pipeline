@@ -642,6 +642,50 @@ def extract_images_from_excel_zip(excel_path):
         pass
     return cell_image_map
 
+def parse_time_to_timestamp(val):
+    """智能解析 Excel / 字符串 / datetime / 时间戳为统一的 Unix 时间戳"""
+    if not val:
+        return 0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, (datetime.datetime, datetime.date)):
+        return datetime.datetime(val.year, val.month, val.day, getattr(val, 'hour', 0), getattr(val, 'minute', 0), getattr(val, 'second', 0)).timestamp()
+    val_str = str(val).strip()
+    if not val_str or val_str == "None":
+        return 0
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+        "%Y.%m.%d %H:%M:%S",
+        "%Y.%m.%d %H:%M",
+        "%Y.%m.%d",
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.datetime.strptime(val_str, fmt)
+            return dt.timestamp()
+        except ValueError:
+            pass
+    return 0
+
+def format_display_time(mtime):
+    """友好格式化时间戳用于卡片展示"""
+    if not mtime or mtime <= 0:
+        return ""
+    try:
+        dt = datetime.datetime.fromtimestamp(mtime)
+        now = datetime.datetime.now()
+        if dt.year == now.year:
+            return dt.strftime("%m-%d %H:%M")
+        else:
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
 def normalize_category(raw_val):
     if not raw_val:
         return "包装"
@@ -712,10 +756,11 @@ def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
                 
             brand_val = resolve_brand_name(brand_val, brand_aliases, ignored_brands)
             cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
-            cat_val = normalize_category(cat_val)
-            time_val = str(row[time_col - 1]).strip() if time_col and len(row) >= time_col and row[time_col - 1] else ""
+            time_raw = row[time_col - 1] if time_col and len(row) >= time_col else ""
+            time_val = str(time_raw).strip() if time_raw else ""
             if time_val == "None":
                 time_val = ""
+            excel_mtime = parse_time_to_timestamp(time_raw)
                 
             img_path = cell_images.get(row_idx, "")
             
@@ -728,7 +773,7 @@ def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
                 "thumbnail": img_path,
                 "time": time_val,
                 "row_idx": row_idx,
-                "mtime": 0
+                "mtime": excel_mtime
             })
         wb.close()
     except Exception:
@@ -997,7 +1042,7 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
             "row_idx": ep.get("row_idx", 0),
             "path": matched_dp["path"] if matched_dp else (ep.get("path") or ""),
             "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and is_valid_beauty_thumbnail(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
-            "mtime": matched_dp["mtime"] if matched_dp else 0
+            "mtime": (matched_dp["mtime"] if matched_dp and matched_dp.get("mtime") else 0) or ep.get("mtime", 0)
         }
         if matched_dp:
             matched_disk_paths.add(matched_dp["path"].lower().replace("/", "\\"))
@@ -1585,6 +1630,16 @@ class GalleryCardDelegate(QStyledItemDelegate):
             painter.setFont(font_brand)
             painter.drawText(badge_rect.right() + 6, badge_y + 13, brand_val)
 
+        # 绘制时间（右对齐）
+        time_str = format_display_time(proj.get("mtime", 0)) or proj.get("time", "")
+        if time_str:
+            painter.setPen(QColor("#717684") if is_dark else QColor("#94A3B8"))
+            font_time = QFont(painter.font())
+            font_time.setPointSize(8)
+            painter.setFont(font_time)
+            time_rect = QRect(badge_rect.right() + 6, badge_y, rect.right() - badge_rect.right() - 16, 18)
+            painter.drawText(time_rect, Qt.AlignRight | Qt.AlignVCenter, f"⏱️ {time_str}")
+
         title_y = badge_y + 26
         title_rect = QRect(rect.left() + 10, title_y, rect.width() - 20, 22)
         painter.setPen(QColor("#F1F3F5") if is_dark else QColor("#0F172A"))
@@ -1980,8 +2035,18 @@ class MainWindow(QMainWindow):
         self.view_combo.addItems(["⚡ 智能融合视图", "📊 仅 Excel 台账", "💾 仅工作盘扫描"])
         self.view_combo.currentIndexChanged.connect(self.on_view_mode_changed)
 
-        filter_bar.addWidget(self.search_edit, stretch=2)
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems([
+            "⏱️ 最新修改时间 (从新到旧)",
+            "⏳ 最早创建时间 (从旧到新)",
+            "🏢 品牌名称 (A → Z)",
+            "📦 产品名称 (A → Z)"
+        ])
+        self.sort_combo.currentIndexChanged.connect(self.apply_filter)
+
+        filter_bar.addWidget(self.search_edit, stretch=3)
         filter_bar.addWidget(self.view_combo, stretch=1)
+        filter_bar.addWidget(self.sort_combo, stretch=1)
         gal_layout.addLayout(filter_bar)
 
         self.gallery_view = QListView()
@@ -2340,6 +2405,22 @@ class MainWindow(QMainWindow):
                 if kw not in sku and kw not in b_low and kw not in cat.lower():
                     continue
             res.append(p)
+
+        # ----------------- 多维动态排序引擎 -----------------
+        sort_idx = self.sort_combo.currentIndex() if hasattr(self, 'sort_combo') else 0
+        if sort_idx == 0:
+            # ⏱️ 最新修改时间 (从新到旧，降序)
+            res.sort(key=lambda x: (x.get("mtime") or 0, x.get("sku", "")), reverse=True)
+        elif sort_idx == 1:
+            # ⏳ 最早创建时间 (从旧到新，升序)
+            res.sort(key=lambda x: (x.get("mtime") if (x.get("mtime") and x.get("mtime") > 0) else 9999999999, x.get("sku", "")))
+        elif sort_idx == 2:
+            # 🏢 品牌名称 (A → Z)
+            res.sort(key=lambda x: (x.get("brand", "").lower(), x.get("sku", "").lower()))
+        elif sort_idx == 3:
+            # 📦 产品名称 (A → Z)
+            res.sort(key=lambda x: (x.get("sku", "").lower(), x.get("brand", "").lower()))
+
         self.gallery_model.set_projects(res)
 
     def on_card_clicked(self, index):
