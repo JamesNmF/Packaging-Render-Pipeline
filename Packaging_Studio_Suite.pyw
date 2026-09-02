@@ -53,13 +53,17 @@ import webbrowser
 import subprocess
 import xml.etree.ElementTree as ET
 
+# 启动 Splash 管理 (PyInstaller 原生 C 语言启动画面接口)
+try:
+    import pyi_splash
+except ImportError:
+    pyi_splash = None
+
 import ctypes
 from ctypes import wintypes
 
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
-import openpyxl
-from openpyxl.drawing.image import Image as OpenpyxlImage
 
 from PySide6.QtCore import (
     Qt, QSize, QRect, QRectF, QPoint, QModelIndex, QAbstractListModel,
@@ -668,6 +672,7 @@ def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
         return []
     projects = []
     try:
+        import openpyxl
         cell_images = extract_images_from_excel_zip(excel_path)
         wb = openpyxl.load_workbook(excel_path, data_only=True, read_only=True)
         sheet = wb.active
@@ -1024,6 +1029,8 @@ def update_thumbnail_to_excel(excel_path, proj_path, sku, thumb_path):
         return False, f"未找到可用的缩略图文件: {thumb_path}"
 
     try:
+        import openpyxl
+        from openpyxl.drawing.image import Image as OpenpyxlImage
         temp_img_path = get_fast_disk_thumbnail_path(thumb_path, size=(200, 200)) or thumb_path
         wb = openpyxl.load_workbook(excel_path)
         sheet = wb.active
@@ -1075,6 +1082,8 @@ def batch_sync_all_thumbnails_to_excel(excel_path, projects):
         
     success_count = 0
     try:
+        import openpyxl
+        from openpyxl.drawing.image import Image as OpenpyxlImage
         wb = openpyxl.load_workbook(excel_path)
         sheet = wb.active
         
@@ -2450,6 +2459,7 @@ class MainWindow(QMainWindow):
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         if ex_path and os.path.exists(ex_path):
             try:
+                import openpyxl
                 wb = openpyxl.load_workbook(ex_path)
                 sheet = wb.active
                 cat_col = None
@@ -2741,6 +2751,7 @@ class MainWindow(QMainWindow):
                 ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
                 if ex_path and os.path.exists(ex_path):
                     try:
+                        import openpyxl
                         wb = openpyxl.load_workbook(ex_path)
                         sheet = wb.active
                         sku_col = 2
@@ -2827,16 +2838,28 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # ① 第一步：立即显示 Splash，进入事件循环，让猫画面稳定渲染
+    # 检查是否有 C 语言原生的 pyi_splash 正在显示（PyInstaller --splash 打包环境）
+    has_native_splash = False
+    if pyi_splash is not None:
+        try:
+            if hasattr(pyi_splash, 'is_alive'):
+                has_native_splash = pyi_splash.is_alive()
+            else:
+                has_native_splash = True
+        except Exception:
+            has_native_splash = False
+
     splash = None
-    splash_path = SPLASH_CAT_JPG
-    if os.path.exists(splash_path):
-        splash = CatSplashScreen(splash_path)
-        screen_geo = app.primaryScreen().geometry()
-        splash.move((screen_geo.width() - splash.width()) // 2,
-                    (screen_geo.height() - splash.height()) // 2)
-        splash.show()
-        app.processEvents()
+    if not has_native_splash:
+        # 如果未通过 PyInstaller 原生 Splash 启动（如直接 Python 调试运行），使用 Qt CatSplashScreen
+        splash_path = SPLASH_CAT_JPG
+        if os.path.exists(splash_path):
+            splash = CatSplashScreen(splash_path)
+            screen_geo = app.primaryScreen().geometry()
+            splash.move((screen_geo.width() - splash.width()) // 2,
+                        (screen_geo.height() - splash.height()) // 2)
+            splash.show()
+            app.processEvents()
 
     # 双锁门：最少 2000ms + 数据完全加载，二者同时满足才关闭 Splash
     _timer_done = [False]
@@ -2844,11 +2867,22 @@ def main():
     _window     = [None]
 
     def do_show_main():
-        """两把锁都开了才执行"""
+        """两把锁都开了才执行：关闭 Splash 并显示主窗口"""
         if not (_timer_done[0] and _data_done[0]):
             return
+
+        # 1. 关闭 C 语言原生 Splash（如果存在）
+        if pyi_splash is not None:
+            try:
+                pyi_splash.close()
+            except Exception:
+                pass
+
+        # 2. 关闭 Qt 原生 Splash（如果存在）
         if splash:
             splash.close()
+
+        # 3. 展示主窗口并设置 Windows 沉浸式暗黑顶栏
         win = _window[0]
         if win:
             win.show()
@@ -2862,8 +2896,6 @@ def main():
         _data_done[0] = True
         do_show_main()
 
-    # ② 第二步：Splash 已在事件循环中稳定显示后，延迟 50ms 再创建主窗口
-    #    这样 Splash 能真正渲染出来，而不是被 MainWindow() 同步阻塞
     def create_main_window():
         initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
         win = MainWindow(initial_files=initial_files)
@@ -2871,18 +2903,18 @@ def main():
         # 数据加载完毕信号 → 开锁 2
         win.initial_load_done.connect(on_data_ready)
 
-    # ③ 固定 2000ms 最少等待 → 开锁 1（无论数据多快加载完毕都要等满 2 秒）
+    # 固定 2000ms 最少等待 → 开锁 1（无论数据多快加载完毕都要看满 2 秒）
     QTimer.singleShot(2000, on_timer_done)
 
-    # ④ 50ms 后创建主窗口（此时 Splash 已完整渲染并在屏幕上稳定显示）
+    # 延迟 50ms 创建主窗口（让事件循环先稳定）
     QTimer.singleShot(50, create_main_window)
 
-    # ⑤ 终极兜底：5 秒后强制显示，防止信号丢失
+    # 终极兜底：6 秒后强制显示，防止信号异常丢失
     def force_show():
         _timer_done[0] = True
         _data_done[0]  = True
         do_show_main()
-    QTimer.singleShot(5000, force_show)
+    QTimer.singleShot(6000, force_show)
 
     sys.exit(app.exec())
 
