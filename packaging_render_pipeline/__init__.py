@@ -73,7 +73,7 @@ class PackagingPipelineProperties(PropertyGroup):
         default=True
     )
     export_beauty: BoolProperty(name="成品图 (Beauty)", default=True)
-    export_alpha: BoolProperty(name="纯黑剪切蒙版 (Alpha)", default=True)
+    export_alpha: BoolProperty(name="纯黑剪切蒙版 (Alpha)", default=False)
     export_cryptomatte: BoolProperty(name="Cryptomatte 智能选区", default=True)
     auto_open_folder: BoolProperty(name="渲染完成后自动弹出文件夹", default=True)
 
@@ -850,8 +850,7 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         
         row_pass = box_out.row()
         row_pass.prop(props, "export_beauty")
-        row_pass.prop(props, "export_alpha")
-        box_out.prop(props, "export_cryptomatte")
+        row_pass.prop(props, "export_cryptomatte")
         box_out.prop(props, "auto_open_folder")
         
         # 模块 5：核心大按钮
