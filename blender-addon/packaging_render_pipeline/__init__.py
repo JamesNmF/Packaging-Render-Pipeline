@@ -398,6 +398,30 @@ def setup_compositor_and_passes(context, props, effective_prefix):
             tree.links.new(crypto_socket, target_in_socket)
 
 
+def set_all_3d_viewports_to_wireframe():
+    """
+    将 Blender 所有窗口与工作区的 3D 视口着色模式统一切换为【线框模式 (WIREFRAME)】，
+    彻底释放视口实时交互预览对 GPU 显存与计算核心的双重占用，使渲染算力 100% 集中于最终输出！
+    """
+    switched_count = 0
+    try:
+        wm = getattr(bpy.context, "window_manager", None)
+        if wm and hasattr(wm, "windows"):
+            for window in wm.windows:
+                screen = window.screen
+                if not screen:
+                    continue
+                for area in screen.areas:
+                    if area.type == 'VIEW_3D':
+                        for space in area.spaces:
+                            if space.type == 'VIEW_3D':
+                                if hasattr(space, "shading") and space.shading.type != 'WIREFRAME':
+                                    space.shading.type = 'WIREFRAME'
+                                    switched_count += 1
+    except Exception as e:
+        print(f"⚠️ 切换视口线框模式提示: {e}")
+    return switched_count
+
 # ==============================================================================
 # 非阻塞多机位异步接力队列管理器
 # ==============================================================================
@@ -430,6 +454,7 @@ def on_render_complete_batch_dispatcher(scene):
             scene.camera = next_cam
             prefix = f"{current_versioned_sku}_{next_cam.name}"
             setup_compositor_and_passes(bpy.context, scene.packaging_props, prefix)
+            set_all_3d_viewports_to_wireframe()
             print(f"📸 正在连拍机位: {next_cam.name} (剩余 {len(camera_render_queue)} 个)...")
             bpy.ops.render.render('INVOKE_DEFAULT', write_still=True)
             return None
@@ -682,6 +707,9 @@ class RENDER_OT_packaging_export_all(Operator):
         global camera_render_queue, current_versioned_sku, original_scene_camera, target_open_dir, is_in_batch
         scene = context.scene
         props = scene.packaging_props
+        
+        # 0. 瞬间将所有 3D 视口设为线框模式 (Wireframe)，彻底节约 GPU 显存与渲染资源！
+        set_all_3d_viewports_to_wireframe()
         
         # 1. 智能提取产品项目名
         project_name = auto_detect_project_name(scene)
