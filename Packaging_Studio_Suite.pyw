@@ -2266,6 +2266,291 @@ class WorkspaceHubDialog(QDialog):
         self.workspaces_changed.emit(self.workspaces_v2)
         self.accept()
 
+# ----------------- 手动新建项目工程弹窗 -----------------
+class ManualProjectCreateDialog(QDialog):
+    """
+    手动输入名称创建工程项目对话框：
+    支持选择工作盘、输入/选择品牌、业务形态、输入SKU品名，自动生成标准工程目录与.blend并启动Blender
+    """
+    project_created = Signal(dict)
+
+    def __init__(self, cfg, workspaces_v2, curated_brands, ignored_brands, folder_rules, active_rule_id, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("✨ 手动新建项目工程 (输入品名快速开工)")
+        self.resize(680, 520)
+        self.setMinimumSize(580, 440)
+        self.cfg = cfg
+        self.workspaces_v2 = workspaces_v2
+        self.curated_brands = curated_brands
+        self.ignored_brands = ignored_brands
+        self.folder_rules = folder_rules
+        self.active_rule_id = active_rule_id
+        
+        self.build_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title_lbl = QLabel("📁 <b>手动创建工业级标准项目脚手架</b>")
+        title_lbl.setStyleSheet("font-size: 14px;")
+        layout.addWidget(title_lbl)
+
+        form_layout = QGridLayout()
+        form_layout.setSpacing(10)
+
+        # 1. 目标工作盘
+        form_layout.addWidget(QLabel("目标工作盘:"), 0, 0)
+        self.combo_ws = QComboBox()
+        for ws in self.workspaces_v2:
+            p = ws.get("path", "")
+            alias = ws.get("alias", "")
+            is_prim = ws.get("is_primary", False)
+            self.combo_ws.addItem(f"{'⭐ ' if is_prim else ''}{alias} ({p})", p)
+        cur_ws = self.cfg.get("current_workspace", "")
+        for idx in range(self.combo_ws.count()):
+            if cur_ws and os.path.normpath(cur_ws).lower() == os.path.normpath(self.combo_ws.itemData(idx)).lower():
+                self.combo_ws.setCurrentIndex(idx)
+                break
+        self.combo_ws.currentIndexChanged.connect(self.update_preview)
+        form_layout.addWidget(self.combo_ws, 0, 1)
+
+        # 2. 客户品牌
+        form_layout.addWidget(QLabel("客户品牌:"), 1, 0)
+        self.combo_brand = QComboBox()
+        self.combo_brand.setEditable(True)
+        brands = [b for b in self.curated_brands if b not in self.ignored_brands]
+        self.combo_brand.addItems(brands)
+        cur_b = self.cfg.get("current_brand", "柏缇")
+        if cur_b in brands:
+            self.combo_brand.setCurrentText(cur_b)
+        self.combo_brand.currentTextChanged.connect(self.update_preview)
+        form_layout.addWidget(self.combo_brand, 1, 1)
+
+        # 3. 业务形态
+        form_layout.addWidget(QLabel("业务形态:"), 2, 0)
+        self.combo_cat = QComboBox()
+        self.combo_cat.addItems(VALID_CATEGORIES)
+        self.combo_cat.setCurrentText(self.cfg.get("default_category", "包装"))
+        self.combo_cat.currentIndexChanged.connect(self.update_preview)
+        form_layout.addWidget(self.combo_cat, 2, 1)
+
+        # 4. 产品 SKU / 品名
+        form_layout.addWidget(QLabel("<b>产品名称 (SKU):</b>"), 3, 0)
+        self.sku_edit = QLineEdit()
+        self.sku_edit.setPlaceholderText("例如: 红参抗皱紧致双抗乳液 / 多肽修护精华霜")
+        self.sku_edit.setStyleSheet("font-size: 13px; font-weight: bold; padding: 6px;")
+        self.sku_edit.textChanged.connect(self.update_preview)
+        form_layout.addWidget(self.sku_edit, 3, 1)
+
+        # 5. 归档规则
+        form_layout.addWidget(QLabel("归档规则:"), 4, 0)
+        self.combo_rule = QComboBox()
+        for idx, r in enumerate(self.folder_rules):
+            self.combo_rule.addItem(r.get("name", ""), r.get("id"))
+            if r.get("id") == self.active_rule_id:
+                self.combo_rule.setCurrentIndex(idx)
+        self.combo_rule.currentIndexChanged.connect(self.update_preview)
+        form_layout.addWidget(self.combo_rule, 4, 1)
+
+        layout.addLayout(form_layout)
+
+        # 目录树实时预览
+        layout.addWidget(QLabel("📁 <b>即将生成的物理目录与工程文件预览:</b>"))
+        self.preview_lbl = QLabel()
+        self.preview_lbl.setStyleSheet("background: #141518; color: #34D399; font-family: Consolas, 'Microsoft YaHei UI'; padding: 10px; border-radius: 6px; font-size: 11px;")
+        layout.addWidget(self.preview_lbl)
+
+        # 自动化选项
+        opts_box = QHBoxLayout()
+        self.chk_blend = QCheckBox("✨ 自动创建对应 .blend 工程")
+        self.chk_blend.setChecked(True)
+        self.chk_open_blender = QCheckBox("🚀 立即拉起 Blender 开工")
+        self.chk_open_blender.setChecked(True)
+        self.chk_excel = QCheckBox("📊 录入 Excel 台账")
+        self.chk_excel.setChecked(True)
+        self.chk_open_folder = QCheckBox("📂 在文件夹中打开")
+        self.chk_open_folder.setChecked(True)
+
+        opts_box.addWidget(self.chk_blend)
+        opts_box.addWidget(self.chk_open_blender)
+        opts_box.addWidget(self.chk_excel)
+        opts_box.addWidget(self.chk_open_folder)
+        layout.addLayout(opts_box)
+
+        # 底部按钮
+        btn_bar = QHBoxLayout()
+        btn_create = QPushButton("🚀 立即创建项目工程并开工")
+        btn_create.setObjectName("PrimaryBtn")
+        btn_create.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 13px; padding: 8px 20px;")
+        btn_create.clicked.connect(self.do_create_project)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_bar.addStretch()
+        btn_bar.addWidget(btn_cancel)
+        btn_bar.addWidget(btn_create)
+        layout.addLayout(btn_bar)
+
+        self.update_preview()
+
+    def get_selected_rule(self):
+        rule_id = self.combo_rule.currentData()
+        for r in self.folder_rules:
+            if r.get("id") == rule_id:
+                return r
+        return self.folder_rules[0] if self.folder_rules else DEFAULT_FOLDER_RULES[0]
+
+    def update_preview(self):
+        ws_path = self.combo_ws.currentData() or "E:\\zjc"
+        brand = self.combo_brand.currentText().strip() or "客户品牌"
+        cat = self.combo_cat.currentText().strip() or "包装"
+        raw_sku = self.sku_edit.text().strip() or "未命名产品品名"
+        sku = re.sub(r'[\\/:*?"<>|]', '', raw_sku).strip() or "产品SKU"
+        
+        rule = self.get_selected_rule()
+        pat = rule.get("path_pattern", "{brand}/{sku}")
+        subfolders = rule.get("subfolders", DEFAULT_FOLDER_RULES[0]["subfolders"])
+        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
+
+        if "{category}" in pat:
+            rel = f"{cat}\\{brand}\\{sku}"
+        elif "{brand}" in pat:
+            rel = f"{brand}\\{sku}"
+        else:
+            rel = sku
+            
+        full_proj_dir = os.path.join(ws_path, rel)
+        
+        lines = [f"📁 {full_proj_dir}"]
+        for i, s in enumerate(subfolders):
+            prefix = " └── 📂 " if i == len(subfolders) - 1 else " ├── 📂 "
+            extra = f" (含 {sku}.blend)" if s == blend_sub else ""
+            lines.append(f"{prefix}{s}{extra}")
+            
+        self.preview_lbl.setText("\n".join(lines[:7]))
+
+    def do_create_project(self):
+        ws_path = self.combo_ws.currentData()
+        if not ws_path or not os.path.exists(ws_path):
+            QMessageBox.warning(self, "错误", f"目标工作盘不存在:\n{ws_path}")
+            return
+            
+        brand = self.combo_brand.currentText().strip()
+        cat = self.combo_cat.currentText().strip()
+        raw_sku = self.sku_edit.text().strip()
+        if not raw_sku:
+            QMessageBox.warning(self, "提示", "请输入产品名称 (SKU)！")
+            self.sku_edit.setFocus()
+            return
+            
+        sku = re.sub(r'[\\/:*?"<>|]', '', raw_sku).strip()
+        if not sku:
+            QMessageBox.warning(self, "提示", "产品名称包含非法字符，请输入有效的品名！")
+            return
+            
+        rule = self.get_selected_rule()
+        pat = rule.get("path_pattern", "{brand}/{sku}")
+        subfolders = rule.get("subfolders", DEFAULT_FOLDER_RULES[0]["subfolders"])
+        blend_sub = rule.get("blend_sub", "03_3D_三维工程")
+        
+        if "{category}" in pat:
+            rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
+        elif "{brand}" in pat:
+            rel = f"{brand}/{sku}" if brand else sku
+        else:
+            rel = sku
+            
+        proj_dir = os.path.join(ws_path, rel)
+        try:
+            os.makedirs(proj_dir, exist_ok=True)
+            for s in subfolders:
+                os.makedirs(os.path.join(proj_dir, s), exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, "创建失败", f"无法创建项目目录:\n{proj_dir}\n\n{str(e)}")
+            return
+            
+        # 自动生成 .blend 工程
+        target_blend = os.path.join(proj_dir, blend_sub, f"{sku}.blend")
+        if self.chk_blend.isChecked():
+            if not os.path.exists(target_blend):
+                tpl = get_valid_template_blend(self.cfg)
+                if tpl and os.path.exists(tpl):
+                    shutil.copy2(tpl, target_blend)
+                else:
+                    with open(target_blend, "wb") as bf:
+                        pass
+                        
+        # 录入 Excel 台账
+        if self.chk_excel.isChecked():
+            ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+            if ex_path and os.path.exists(ex_path):
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(ex_path)
+                    sheet = wb.active
+                    sku_col = 2
+                    brand_col = 1
+                    cat_col = None
+                    for col_idx, cell in enumerate(sheet[1], start=1):
+                        val = str(cell.value or "").strip()
+                        if val in ("产品名称", "SKU", "品名", "产品命名"):
+                            sku_col = col_idx
+                        if val in ("品牌", "客户"):
+                            brand_col = col_idx
+                        if val in ("业务形态", "分类", "类别"):
+                            cat_col = col_idx
+                            
+                    sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower())
+                    exists = False
+                    for r in range(2, sheet.max_row + 1):
+                        c_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+                        if sku_clean and sku_clean == re.sub(r'[\s_\-\(\)（）]+', '', c_val.lower()):
+                            exists = True
+                            break
+                    if not exists:
+                        new_r = sheet.max_row + 1
+                        sheet.cell(row=new_r, column=brand_col, value=brand)
+                        sheet.cell(row=new_r, column=sku_col, value=sku)
+                        if cat_col:
+                            sheet.cell(row=new_r, column=cat_col, value=cat)
+                        wb.save(ex_path)
+                    wb.close()
+                except Exception:
+                    pass
+                    
+        # 拉起 Blender
+        if self.chk_open_blender.isChecked() and os.path.exists(target_blend):
+            try:
+                subprocess.Popen([BLENDER_EXE, target_blend])
+            except Exception:
+                try:
+                    os.startfile(target_blend)
+                except Exception:
+                    pass
+                    
+        # 弹出文件夹
+        if self.chk_open_folder.isChecked():
+            try:
+                os.startfile(proj_dir)
+            except Exception:
+                pass
+                
+        self.project_created.emit({
+            "path": proj_dir,
+            "sku": sku,
+            "brand": brand,
+            "cat": cat,
+            "ws_path": ws_path
+        })
+        QMessageBox.information(self, "创建成功", f"🎉 项目 【{brand} / {sku}】 已成功创建并初始化完成！")
+        self.accept()
+
 # ----------------- Qt6 工业级主窗口 -----------------
 class MainWindow(QMainWindow):
     initial_load_done = Signal()
@@ -2579,15 +2864,26 @@ class MainWindow(QMainWindow):
         g3_layout = QVBoxLayout(group3)
         
         tools_layout = QHBoxLayout()
+        btn_manual_create = QPushButton("✨ 手动新建项目...")
+        btn_manual_create.setObjectName("PrimaryBtn")
+        btn_manual_create.setToolTip("手动输入品名、选择品牌与形态，立即生成标准工程并开工")
+        btn_manual_create.clicked.connect(self.open_manual_project_create_dialog)
+
         btn_add_files = QPushButton("➕ 添加设计源文件...")
-        btn_add_files.setObjectName("PrimaryBtn")
         btn_add_files.clicked.connect(self.browse_source_files)
+
+        btn_add_manual_item = QPushButton("✏️ 手动输入品名...")
+        btn_add_manual_item.setToolTip("手动输入一个或多个品名，添加到下方待分拣列表")
+        btn_add_manual_item.clicked.connect(self.add_manual_sku_to_organizer)
+
         btn_clear = QPushButton("🗑️ 清空列表")
         btn_clear.clicked.connect(self.clear_source_files)
         btn_install_jsx = QPushButton("🛠️ 一键将导出脚本注入 Illustrator")
         btn_install_jsx.clicked.connect(self.install_ai_jsx_script)
         
+        tools_layout.addWidget(btn_manual_create)
         tools_layout.addWidget(btn_add_files)
+        tools_layout.addWidget(btn_add_manual_item)
         tools_layout.addWidget(btn_clear)
         tools_layout.addStretch()
         tools_layout.addWidget(btn_install_jsx)
@@ -3316,6 +3612,39 @@ class MainWindow(QMainWindow):
             self.combo_brand.setCurrentText(b)
             self.on_organizer_setting_changed()
 
+    def open_manual_project_create_dialog(self):
+        """弹出独立对话框，手动输入品名创建项目工程并开工"""
+        dlg = ManualProjectCreateDialog(
+            self.cfg, self.workspaces_v2, self.curated_brands, self.ignored_brands,
+            self.folder_rules, self.active_rule_id, self
+        )
+        dlg.project_created.connect(self.on_manual_project_created)
+        dlg.exec()
+
+    def on_manual_project_created(self, proj_info):
+        self.async_load_data()
+
+    def add_manual_sku_to_organizer(self):
+        """手动输入产品品名直接加入待分拣表格"""
+        text, ok = QInputDialog.getMultiLineText(
+            self, "✏️ 手动输入产品品名",
+            "请输入产品 SKU / 品名（支持一次输入多个，一行一个或用逗号隔开）:",
+            ""
+        )
+        if ok and text.strip():
+            raw_skus = re.split(r'[\n,，]+', text)
+            added_count = 0
+            for raw_sku in raw_skus:
+                clean_sku = re.sub(r'[\\/:*?"<>|]', '', raw_sku).strip()
+                if clean_sku:
+                    item_key = f"__manual__:{clean_sku}"
+                    if item_key not in self.files_to_organize:
+                        self.files_to_organize.append(item_key)
+                        added_count += 1
+            if added_count > 0:
+                self.refresh_organizer_table()
+                QMessageBox.information(self, "添加成功", f"已成功添加 {added_count} 个手动新建项目到列表中！\n点击下方【🚀 一键分拣归档并拉起 Blender 开工】即可一键生成全部项目脚手架。")
+
     def browse_source_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "选择设计源文件", "", "Design Files (*.ai *.psd *.pdf *.zip *.rar);;All Files (*.*)")
         if files:
@@ -3341,8 +3670,12 @@ class MainWindow(QMainWindow):
         pat = rule.get("path_pattern", "{brand}/{sku}")
 
         for f in self.files_to_organize:
-            fname = os.path.basename(f)
-            sku = os.path.splitext(fname)[0]
+            if f.startswith("__manual__:"):
+                sku = f.split(":", 1)[1]
+                fname = f"✨ [手动新建] {sku}"
+            else:
+                fname = os.path.basename(f)
+                sku = os.path.splitext(fname)[0]
             
             if "{category}" in pat:
                 rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
@@ -3361,7 +3694,7 @@ class MainWindow(QMainWindow):
 
     def execute_organize_flow(self):
         if not self.files_to_organize:
-            QMessageBox.warning(self, "提示", "请先点击【➕ 添加设计源文件】选择待分拣的平面原稿！")
+            QMessageBox.warning(self, "提示", "请先点击【➕ 添加设计源文件】或【✏️ 手动输入品名】！")
             return
             
         cur_ws = self.get_current_organizer_workspace()
@@ -3388,10 +3721,15 @@ class MainWindow(QMainWindow):
         opened_ai = None
         
         for fpath in list(self.files_to_organize):
-            if not os.path.exists(fpath):
-                continue
-            fname = os.path.basename(fpath)
-            sku = os.path.splitext(fname)[0]
+            is_manual = fpath.startswith("__manual__:")
+            if is_manual:
+                sku = fpath.split(":", 1)[1]
+                fname = ""
+            else:
+                if not os.path.exists(fpath):
+                    continue
+                fname = os.path.basename(fpath)
+                sku = os.path.splitext(fname)[0]
             
             if "{category}" in pat:
                 rel = f"{cat}/{brand}/{sku}" if brand else f"{cat}/{sku}"
@@ -3412,19 +3750,20 @@ class MainWindow(QMainWindow):
             if not first_proj_dir:
                 first_proj_dir = proj_dir
                 
-            # 1. 复制源文件到 01_Design_平面原稿
-            dest_fpath = os.path.join(proj_dir, design_sub, fname)
-            try:
-                shutil.copy2(fpath, dest_fpath)
-            except Exception as e:
-                print(f"复制源文件失败: {e}")
-                
-            if auto_ai and not opened_ai and fname.lower().endswith(('.ai', '.psd', '.pdf')):
+            # 1. 复制源文件到 01_Design_平面原稿 (如果是非手动项)
+            if not is_manual and fname:
+                dest_fpath = os.path.join(proj_dir, design_sub, fname)
                 try:
-                    os.startfile(dest_fpath)
-                    opened_ai = dest_fpath
-                except Exception:
-                    pass
+                    shutil.copy2(fpath, dest_fpath)
+                except Exception as e:
+                    print(f"复制源文件失败: {e}")
+                    
+                if auto_ai and not opened_ai and fname.lower().endswith(('.ai', '.psd', '.pdf')):
+                    try:
+                        os.startfile(dest_fpath)
+                        opened_ai = dest_fpath
+                    except Exception:
+                        pass
                     
             # 2. 生成对应 .blend 工程并启动 Blender
             blend_dir = os.path.join(proj_dir, blend_sub)
