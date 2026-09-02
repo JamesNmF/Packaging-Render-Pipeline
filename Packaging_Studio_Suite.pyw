@@ -79,7 +79,7 @@ from PySide6.QtWidgets import (
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
-    QProgressBar, QSplashScreen, QToolButton
+    QProgressBar, QSplashScreen, QToolButton, QProgressDialog
 )
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
@@ -1017,6 +1017,9 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
         sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', ep["sku"].lower())
         matched_dp = disk_map.get(f"sku:{sku_clean}")
         
+        excel_p = ep.get("path") or ""
+        real_disk_path = matched_dp["path"] if matched_dp else (excel_p if (excel_p and os.path.exists(excel_p)) else "")
+        
         item = {
             "source": "merged" if matched_dp else "excel",
             "brand": ep.get("brand") or (matched_dp.get("brand") if matched_dp else "柏缇"),
@@ -1025,13 +1028,16 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
             "cat": ep.get("cat") or (matched_dp.get("cat") if matched_dp else "包装"),
             "time": ep.get("time", ""),
             "row_idx": ep.get("row_idx", 0),
-            "path": matched_dp["path"] if matched_dp else (ep.get("path") or ""),
+            "path": real_disk_path,
             "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and is_valid_beauty_thumbnail(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
             "mtime": (matched_dp["mtime"] if matched_dp and matched_dp.get("mtime") else 0) or ep.get("mtime", 0)
         }
         if matched_dp:
             matched_disk_paths.add(matched_dp["path"].lower().replace("/", "\\"))
-        merged.append(item)
+            
+        # 智能融合视图中仅保留磁盘物理存在的真实资产，杜绝历史死数据
+        if real_disk_path:
+            merged.append(item)
         
     for dp in disk_projects:
         norm_p = dp["path"].lower().replace("/", "\\")
@@ -1666,6 +1672,127 @@ class GalleryCardDelegate(QStyledItemDelegate):
         model.loading_set.discard(img_path)
         self.parent_view.viewport().update()
 
+# ----------------- 丝滑阻尼平滑滚动视图 -----------------
+class SmoothGalleryView(QListView):
+    """
+    丝滑阻尼平滑像素级滚动视图：
+    彻底解决原生 QListView (IconMode) 鼠标滚轮跳跃幅度过大的问题，
+    实现细腻、平滑、跟手的像素级滚动。
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVerticalScrollMode(QListView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.verticalScrollBar().setSingleStep(32)
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta != 0:
+            step = -int(delta / 120.0 * 45.0)
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.value() + step)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+# ----------------- 异步防闪退 Excel 缩略图同步引擎 -----------------
+class ExcelSyncSignals(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(bool, str)
+
+class ExcelSyncWorker(QRunnable):
+    def __init__(self, excel_path, projects):
+        super().__init__()
+        self.excel_path = excel_path
+        self.projects = projects
+        self.signals = ExcelSyncSignals()
+        self.is_cancelled = False
+
+    def cancel(self):
+        self.is_cancelled = True
+
+    def run(self):
+        valid_items = [p for p in self.projects if p.get("thumbnail") and is_valid_beauty_thumbnail(p["thumbnail"])]
+        if not valid_items:
+            self.signals.finished.emit(False, "当前没有找到任何带有有效成片效果图的项目！")
+            return
+            
+        total = len(valid_items)
+        success_count = 0
+        try:
+            import openpyxl
+            from openpyxl.drawing.image import Image as OpenpyxlImage
+            from PIL import Image as PILImage
+            
+            wb = openpyxl.load_workbook(self.excel_path)
+            sheet = wb.active
+            
+            sku_col = 2
+            for col_idx, cell in enumerate(sheet[1], start=1):
+                val = str(cell.value or "").strip()
+                if val in ("产品名称", "SKU", "品名", "产品命名"):
+                    sku_col = col_idx
+                    break
+                    
+            row_map = {}
+            for r in range(2, sheet.max_row + 1):
+                c_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+                if c_val:
+                    c_clean = re.sub(r'[\s_\-\(\)（）]+', '', c_val.lower())
+                    row_map[c_clean] = r
+                    
+            sheet.column_dimensions['C'].width = 14
+            
+            temp_sync_dir = os.path.join(CACHE_DIR, "excel_sync_temp")
+            os.makedirs(temp_sync_dir, exist_ok=True)
+            
+            for idx, item in enumerate(valid_items, start=1):
+                if self.is_cancelled:
+                    wb.close()
+                    self.signals.finished.emit(False, "已取消同步操作。")
+                    return
+                    
+                sku = item.get("sku", "")
+                self.signals.progress.emit(idx, total, sku)
+                
+                sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower()) if sku else ""
+                target_row = row_map.get(sku_clean)
+                if not target_row:
+                    for c_clean, r_idx in row_map.items():
+                        if sku_clean and (sku_clean in c_clean or c_clean in sku_clean):
+                            target_row = r_idx
+                            break
+                if not target_row:
+                    continue
+                    
+                thumb_path = item["thumbnail"]
+                if not os.path.exists(thumb_path):
+                    continue
+                    
+                try:
+                    safe_thumb_path = os.path.join(temp_sync_dir, f"thumb_row_{target_row}.jpg")
+                    with PILImage.open(thumb_path) as im:
+                        im = im.convert("RGB")
+                        im.thumbnail((150, 150), PILImage.Resampling.LANCZOS)
+                        im.save(safe_thumb_path, "JPEG", quality=85)
+                        
+                    img = OpenpyxlImage(safe_thumb_path)
+                    img.width = 75
+                    img.height = 75
+                    sheet.row_dimensions[target_row].height = 65
+                    sheet.add_image(img, f"C{target_row}")
+                    success_count += 1
+                except Exception:
+                    pass
+                    
+            wb.save(self.excel_path)
+            wb.close()
+            self.signals.finished.emit(True, f"🎉 批量同步成功！已成功将 {success_count} 个项目的成片效果图写入《产品列表.xlsx》！")
+        except PermissionError:
+            self.signals.finished.emit(False, "无法保存 Excel！请先关闭正在打开《产品列表.xlsx》的 WPS 或 Excel 程序后重试。")
+        except Exception as e:
+            self.signals.finished.emit(False, f"同步 Excel 缩略图发生异常: {str(e)}")
+
 # ----------------- 自定义文件夹规则管理弹窗 -----------------
 class FolderRuleManagerDialog(QDialog):
     def __init__(self, rules, active_rule_id, parent=None):
@@ -2034,15 +2161,13 @@ class MainWindow(QMainWindow):
         filter_bar.addWidget(self.sort_combo, stretch=1)
         gal_layout.addLayout(filter_bar)
 
-        self.gallery_view = QListView()
+        self.gallery_view = SmoothGalleryView()
         self.gallery_view.setObjectName("GalleryView")
         self.gallery_view.setViewMode(QListView.IconMode)
         self.gallery_view.setResizeMode(QListView.Adjust)
         self.gallery_view.setUniformItemSizes(True)
         self.gallery_view.setSpacing(12)
         self.gallery_view.setMovement(QListView.Static)
-        self.gallery_view.setVerticalScrollMode(QListView.ScrollPerPixel)
-        self.gallery_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         self.gallery_model = GalleryModel(self)
         self.gallery_delegate = GalleryCardDelegate(self.gallery_view)
@@ -2481,12 +2606,27 @@ class MainWindow(QMainWindow):
         if real_path and os.path.exists(real_path):
             os.startfile(real_path)
         else:
-            QMessageBox.warning(self, "提示", f"该项目的本地文件夹暂未找到:\n{path or sku}")
+            cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
+            reply = QMessageBox.question(
+                self, "项目未在工作盘创建",
+                f"【{sku or '该项目'}】尚未在当前工作盘中创建本地工程目录。\n\n是否立即一键在工作盘自动建立标准工程结构？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes and sku and cur_ws and os.path.exists(cur_ws):
+                rule = self.get_current_folder_rule()
+                subfolders = rule.get("subfolders", DEFAULT_FOLDER_RULES[0]["subfolders"])
+                brand_name = brand or "未分类品牌"
+                proj_dir = os.path.join(cur_ws, brand_name, sku)
+                os.makedirs(proj_dir, exist_ok=True)
+                for sub in subfolders:
+                    os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
+                os.startfile(proj_dir)
+                self.async_load_data()
 
     def launch_blend(self, proj_path, sku="", brand=""):
         real_path = self.resolve_project_path(proj_path, sku, brand)
         if not real_path or not os.path.exists(real_path):
-            QMessageBox.warning(self, "提示", f"未找到该项目的本地文件夹:\n{proj_path or sku}")
+            self.open_folder(proj_path, sku=sku, brand=brand)
             return
         rule = self.get_current_folder_rule()
         blend_sub = rule.get("blend_sub", "03_3D_三维工程")
@@ -2501,7 +2641,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 os.startfile(chosen)
         else:
-            self.open_folder(real_path)
+            tpl = get_valid_template_blend(self.cfg)
+            target_blend = os.path.join(target_dir, f"{sku or '工程'}.blend")
+            if tpl and os.path.exists(tpl):
+                shutil.copy2(tpl, target_blend)
+                try:
+                    subprocess.Popen([BLENDER_EXE, target_blend])
+                except Exception:
+                    os.startfile(target_blend)
+            else:
+                self.open_folder(real_path)
 
     def change_project_category(self, proj, new_cat):
         sku = proj.get("sku")
@@ -2553,19 +2702,67 @@ class MainWindow(QMainWindow):
 
     def sync_single_thumbnail_to_excel(self, proj):
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
-        ok, msg = update_thumbnail_to_excel(ex_path, proj.get("path"), proj.get("sku"), proj.get("thumbnail"))
-        if ok:
-            QMessageBox.information(self, "同步成功", msg)
-        else:
-            QMessageBox.warning(self, "同步失败", msg)
+        if not ex_path or not os.path.exists(ex_path):
+            QMessageBox.warning(self, "同步失败", "未找到绑定的《产品列表.xlsx》台账文件！")
+            return
+        if not proj.get("thumbnail") or not os.path.exists(proj["thumbnail"]):
+            QMessageBox.warning(self, "同步失败", "该项目暂无有效的成片渲染缩略图！")
+            return
+            
+        progress = QProgressDialog("正在将缩略图写入 Excel 台账...", "取消", 0, 1, self)
+        progress.setWindowTitle("📊 缩略图写入 Excel")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        
+        worker = ExcelSyncWorker(ex_path, [proj])
+        
+        def on_finished(ok, msg):
+            progress.close()
+            if ok:
+                QMessageBox.information(self, "同步成功", f"🎉 已成功将 [{proj.get('sku')}] 的成片缩略图写入 Excel 台账！")
+            else:
+                QMessageBox.warning(self, "同步失败", msg)
+                
+        worker.signals.finished.connect(on_finished)
+        progress.canceled.connect(worker.cancel)
+        self.thread_pool.start(worker)
 
     def sync_all_thumbnails_to_excel(self):
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
-        ok, msg = batch_sync_all_thumbnails_to_excel(ex_path, self.merged_projects)
-        if ok:
-            QMessageBox.information(self, "批量同步成功", msg)
-        else:
-            QMessageBox.warning(self, "批量同步失败", msg)
+        if not ex_path or not os.path.exists(ex_path):
+            QMessageBox.warning(self, "同步失败", "未找到绑定的《产品列表.xlsx》台账文件！")
+            return
+            
+        valid_items = [p for p in self.merged_projects if p.get("thumbnail") and is_valid_beauty_thumbnail(p["thumbnail"])]
+        if not valid_items:
+            QMessageBox.warning(self, "提示", "当前没有找到任何带有有效成片缩略图的项目！")
+            return
+            
+        total = len(valid_items)
+        progress = QProgressDialog("正在准备同步缩略图到 Excel...", "取消", 0, total, self)
+        progress.setWindowTitle("📊 批量同步缩略图到 Excel")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        
+        worker = ExcelSyncWorker(ex_path, self.merged_projects)
+        
+        def on_progress(cur, tot, sku):
+            progress.setValue(cur)
+            progress.setLabelText(f"正在同步 ({cur}/{tot}): {sku}")
+            
+        def on_finished(ok, msg):
+            progress.close()
+            if ok:
+                QMessageBox.information(self, "批量同步成功", msg)
+            else:
+                QMessageBox.warning(self, "批量同步失败", msg)
+                
+        worker.signals.progress.connect(on_progress)
+        worker.signals.finished.connect(on_finished)
+        progress.canceled.connect(worker.cancel)
+        self.thread_pool.start(worker)
 
     def bind_excel_file(self):
         f, _ = QFileDialog.getOpenFileName(self, "绑定 Excel 产品台账", "", "Excel Files (*.xlsx *.xls)")
