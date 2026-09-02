@@ -2286,6 +2286,46 @@ def scan_weekly_report_items(workspaces_v2, start_dt, end_dt):
     items.sort(key=lambda x: x.get("latest_mtime", 0), reverse=True)
     return items
 
+class WeeklyReportProgressBarDelegate(QStyledItemDelegate):
+    """在 QTableWidget 完成进度列绘制浅绿色进度条"""
+    def paint(self, painter, option, index):
+        item_text = index.model().data(index, Qt.DisplayRole) or ""
+        try:
+            val_str = str(item_text).replace("%", "").strip()
+            progress = max(0, min(100, int(float(val_str))))
+        except Exception:
+            progress = 100
+            
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 单元格底色
+        painter.fillRect(option.rect, QBrush(QColor("#1E2024")))
+        
+        # 进度条尺寸
+        rect = option.rect.adjusted(6, 5, -6, -5)
+        
+        # 槽背景
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor("#064E3B")))
+        painter.drawRoundedRect(rect, 4, 4)
+        
+        # 进度填充 (柔和浅绿渐变)
+        if progress > 0:
+            fill_width = int(rect.width() * (progress / 100.0))
+            fill_rect = QRect(rect.x(), rect.y(), fill_width, rect.height())
+            grad = QLinearGradient(fill_rect.topLeft(), fill_rect.bottomLeft())
+            grad.setColorAt(0, QColor("#34D399"))
+            grad.setColorAt(1, QColor("#059669"))
+            painter.setBrush(QBrush(grad))
+            painter.drawRoundedRect(fill_rect, 4, 4)
+            
+        # 百分比文字
+        painter.setPen(QColor("#FFFFFF"))
+        painter.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+        painter.drawText(option.rect, Qt.AlignCenter, f"{progress}%")
+        painter.restore()
+
 class WeeklyReportDialog(QDialog):
     """自动化工作汇报 (周报) 生成与导出对话框"""
     def __init__(self, workspaces_v2, parent=None):
@@ -2351,6 +2391,7 @@ class WeeklyReportDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.verticalHeader().setVisible(False)
+        self.table.setItemDelegateForColumn(5, WeeklyReportProgressBarDelegate(self))
         self.table.setStyleSheet("""
             QTableWidget {
                 gridline-color: #333842;
@@ -2766,6 +2807,37 @@ class WeeklyReportDialog(QDialog):
                 ws.column_dimensions["E"].width = 14
                 ws.column_dimensions["F"].width = 18
             
+            # 无论是否从模板加载，均显式添加绿色数据条条件格式 (Data Bar)
+            try:
+                from openpyxl.formatting.rule import DataBarRule
+                max_r = max(len(active) + 3, 4)
+                
+                # 确保 E 列单元格为数值和 0% 格式
+                for r in range(4, max_r + 1):
+                    cell = ws.cell(row=r, column=5)
+                    if cell.value is not None:
+                        try:
+                            if isinstance(cell.value, str):
+                                val_f = float(cell.value.replace("%", "").strip()) / 100.0
+                                cell.value = val_f
+                        except Exception:
+                            pass
+                        cell.number_format = "0%"
+                        
+                databar_rule = DataBarRule(
+                    start_type="num",
+                    start_value=0.0,
+                    end_type="num",
+                    end_value=1.0,
+                    color="63C384",  # 蓝本原版柔和渐变绿
+                    showValue=None,
+                    minLength=None,
+                    maxLength=None
+                )
+                ws.conditional_formatting.add(f"E4:E{max_r}", databar_rule)
+            except Exception as cf_err:
+                print(f"[WeeklyReport] 添加条件格式数据条警告: {cf_err}")
+
             wb.save(save_path)
             wb.close()
             
