@@ -81,6 +81,9 @@ from PySide6.QtWidgets import (
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
     QProgressBar, QSplashScreen, QToolButton, QProgressDialog, QSystemTrayIcon
 )
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+
+IPC_SERVER_KEY = "PackagingStudioSuite_IPC_SingleInstance_v10"
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".packaging_asset_thumbnails")
@@ -4046,6 +4049,31 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # ---------------- 单实例互斥检测与后台瞬时唤醒 ----------------
+    ipc_socket = QLocalSocket()
+    ipc_socket.connectToServer(IPC_SERVER_KEY)
+    if ipc_socket.waitForConnected(300):
+        # 说明已有后台/前台实例正在运行！
+        # 将本次启动带来的命令行参数（如双击打开的文件）发给主进程
+        initial_files = sys.argv[1:] if len(sys.argv) > 1 else []
+        payload = json.dumps({"action": "WAKE_UP", "files": initial_files}).encode("utf-8")
+        ipc_socket.write(payload)
+        ipc_socket.waitForBytesWritten(1000)
+        ipc_socket.disconnectFromServer()
+        
+        # 立即关闭 Native Splash 并极速退出当前重复启动的进程
+        if pyi_splash is not None:
+            try:
+                pyi_splash.close()
+            except Exception:
+                pass
+        sys.exit(0)
+
+    # 首次启动主进程：清理历史残留并建立本地 IPC 监听服务
+    ipc_server = QLocalServer()
+    QLocalServer.removeServer(IPC_SERVER_KEY)
+    ipc_server.listen(IPC_SERVER_KEY)
+
     # 检查是否有 C 语言原生的 pyi_splash 正在显示（PyInstaller --splash 打包环境）
     has_native_splash = False
     if pyi_splash is not None:
@@ -4110,6 +4138,30 @@ def main():
         _window[0] = win
         # 数据加载完毕信号 → 开锁 2
         win.initial_load_done.connect(on_data_ready)
+
+    # 监听后续新启动实例的唤醒请求
+    def on_ipc_wakeup_connection():
+        client = ipc_server.nextPendingConnection()
+        if client:
+            if client.waitForReadyRead(300):
+                try:
+                    raw = client.readAll().data()
+                    data = json.loads(raw.decode("utf-8"))
+                    files = data.get("files", [])
+                    win = _window[0]
+                    if files and win and hasattr(win, "add_files_to_organizer"):
+                        win.tabs.setCurrentIndex(1)
+                        win.add_files_to_organizer(files)
+                except Exception:
+                    pass
+            client.disconnectFromServer()
+            
+            # 无论当前主窗口是在托盘最小化还是被遮挡，0 毫秒立即唤醒并置顶！
+            win = _window[0]
+            if win:
+                win.show_main_window()
+
+    ipc_server.newConnection.connect(on_ipc_wakeup_connection)
 
     # 固定 2000ms 最少等待 → 开锁 1（无论数据多快加载完毕都要看满 2 秒）
     QTimer.singleShot(2000, on_timer_done)
