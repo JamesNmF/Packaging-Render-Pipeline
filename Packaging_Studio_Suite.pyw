@@ -2771,6 +2771,28 @@ class MainWindow(QMainWindow):
         self.combo_ws.setCurrentIndex(target_idx)
         self.combo_ws.blockSignals(False)
 
+    def get_current_organizer_workspace(self):
+        """准确获取当前分拣选中的物理工作盘根路径"""
+        if hasattr(self, "combo_ws"):
+            data = self.combo_ws.currentData()
+            if data and isinstance(data, str) and os.path.exists(data):
+                return os.path.normpath(data)
+            txt = self.combo_ws.currentText()
+            # 尝试从形如 "⭐ 主力生产盘 (E:\zjc)" 中提取括号里的路径
+            m = re.search(r'\((.*?)\)', txt)
+            if m and os.path.exists(m.group(1).strip()):
+                return os.path.normpath(m.group(1).strip())
+            if txt and os.path.exists(txt):
+                return os.path.normpath(txt)
+        if hasattr(self, "workspaces_v2") and self.workspaces_v2:
+            for w in self.workspaces_v2:
+                if w.get("is_primary") and os.path.exists(w.get("path", "")):
+                    return os.path.normpath(w["path"])
+            for w in self.workspaces_v2:
+                if os.path.exists(w.get("path", "")):
+                    return os.path.normpath(w["path"])
+        return "E:\\zjc" if os.path.exists("E:\\zjc") else (self.workspaces[0] if hasattr(self, "workspaces") and self.workspaces else "D:\\Projects")
+
     def on_workspace_filter_changed(self):
         self.update_sidebar_counts()
         self.apply_filter()
@@ -3260,9 +3282,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "规则更新", "已成功更新并应用文件夹归档规则！")
 
     def on_organizer_setting_changed(self):
-        self.cfg["current_workspace"] = self.combo_ws.currentText()
-        self.cfg["current_brand"] = self.combo_brand.currentText()
-        self.cfg["default_category"] = self.combo_cat.currentText()
+        cur_ws = self.get_current_organizer_workspace()
+        self.cfg["current_workspace"] = cur_ws
+        self.cfg["current_brand"] = self.combo_brand.currentText().strip()
+        self.cfg["default_category"] = self.combo_cat.currentText().strip()
         self.cfg["active_rule_id"] = self.active_rule_id
         self.cfg["auto_open_ai"] = self.chk_ai.isChecked()
         self.cfg["auto_create_blend"] = self.chk_blend.isChecked()
@@ -3278,7 +3301,7 @@ class MainWindow(QMainWindow):
             if d not in self.workspaces:
                 self.workspaces.append(d)
                 self.cfg["workspaces"] = self.workspaces
-                self.combo_ws.addItem(d)
+                self.combo_ws.addItem(d, d)
             self.combo_ws.setCurrentText(d)
             self.on_organizer_setting_changed()
 
@@ -3311,9 +3334,9 @@ class MainWindow(QMainWindow):
 
     def refresh_organizer_table(self):
         self.table_files.setRowCount(0)
-        cur_ws = self.combo_ws.currentText()
-        brand = self.combo_brand.currentText()
-        cat = self.combo_cat.currentText()
+        cur_ws = self.get_current_organizer_workspace()
+        brand = self.combo_brand.currentText().strip()
+        cat = self.combo_cat.currentText().strip()
         rule = self.get_current_folder_rule()
         pat = rule.get("path_pattern", "{brand}/{sku}")
 
@@ -3338,12 +3361,16 @@ class MainWindow(QMainWindow):
 
     def execute_organize_flow(self):
         if not self.files_to_organize:
-            QMessageBox.warning(self, "提示", "请先添加待分拣的设计源文件！")
+            QMessageBox.warning(self, "提示", "请先点击【➕ 添加设计源文件】选择待分拣的平面原稿！")
             return
             
-        cur_ws = self.combo_ws.currentText()
-        brand = self.combo_brand.currentText()
-        cat = self.combo_cat.currentText()
+        cur_ws = self.get_current_organizer_workspace()
+        if not cur_ws or not os.path.exists(cur_ws):
+            QMessageBox.warning(self, "工作盘错误", f"未找到有效的工作盘物理目录:\n{cur_ws}\n\n请点击【🗄️ 工作盘管理】检查工作盘路径！")
+            return
+
+        brand = self.combo_brand.currentText().strip()
+        cat = self.combo_cat.currentText().strip()
         rule = self.get_current_folder_rule()
         subfolders = rule.get("subfolders", DEFAULT_FOLDER_RULES[0]["subfolders"])
         pat = rule.get("path_pattern", "{brand}/{sku}")
@@ -3356,10 +3383,11 @@ class MainWindow(QMainWindow):
         auto_excel = self.chk_excel.isChecked()
         
         created_count = 0
+        first_proj_dir = None
         opened_blend = None
         opened_ai = None
         
-        for fpath in self.files_to_organize:
+        for fpath in list(self.files_to_organize):
             if not os.path.exists(fpath):
                 continue
             fname = os.path.basename(fpath)
@@ -3373,15 +3401,23 @@ class MainWindow(QMainWindow):
                 rel = sku
                 
             proj_dir = os.path.join(cur_ws, rel)
-            os.makedirs(proj_dir, exist_ok=True)
-            for sub in subfolders:
-                os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
+            try:
+                os.makedirs(proj_dir, exist_ok=True)
+                for sub in subfolders:
+                    os.makedirs(os.path.join(proj_dir, sub), exist_ok=True)
+            except Exception as e:
+                QMessageBox.critical(self, "创建目录失败", f"无法创建项目目录:\n{proj_dir}\n\n错误信息: {str(e)}")
+                return
                 
+            if not first_proj_dir:
+                first_proj_dir = proj_dir
+                
+            # 1. 复制源文件到 01_Design_平面原稿
             dest_fpath = os.path.join(proj_dir, design_sub, fname)
             try:
                 shutil.copy2(fpath, dest_fpath)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"复制源文件失败: {e}")
                 
             if auto_ai and not opened_ai and fname.lower().endswith(('.ai', '.psd', '.pdf')):
                 try:
@@ -3390,12 +3426,11 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                     
+            # 2. 生成对应 .blend 工程并启动 Blender
+            blend_dir = os.path.join(proj_dir, blend_sub)
+            target_blend = os.path.join(blend_dir, f"{sku}.blend")
             if auto_blend:
-                blend_dir = os.path.join(proj_dir, blend_sub)
-                target_blend = os.path.join(blend_dir, f"{sku}.blend")
-                is_first_creation = not os.path.exists(target_blend)
-                
-                if is_first_creation:
+                if not os.path.exists(target_blend):
                     tpl = get_valid_template_blend(self.cfg)
                     if tpl and os.path.exists(tpl):
                         shutil.copy2(tpl, target_blend)
@@ -3403,14 +3438,19 @@ class MainWindow(QMainWindow):
                         with open(target_blend, "wb") as bf:
                             pass
                             
-                if auto_open_bl and is_first_creation and not opened_blend:
+            if auto_open_bl and not opened_blend:
+                if os.path.exists(target_blend):
                     try:
                         subprocess.Popen([BLENDER_EXE, target_blend])
                         opened_blend = target_blend
                     except Exception:
-                        os.startfile(target_blend)
-                        opened_blend = target_blend
-                        
+                        try:
+                            os.startfile(target_blend)
+                            opened_blend = target_blend
+                        except Exception:
+                            pass
+                            
+            # 3. 自动追加录入 Excel 台账
             if auto_excel:
                 ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
                 if ex_path and os.path.exists(ex_path):
@@ -3447,12 +3487,21 @@ class MainWindow(QMainWindow):
                         wb.close()
                     except Exception:
                         pass
+                        
             created_count += 1
             
         self.files_to_organize.clear()
         self.refresh_organizer_table()
         self.async_load_data()
-        QMessageBox.information(self, "开工成功", f"🎉 已成功分拣归档并初始化 {created_count} 个工程项目！")
+        
+        # 自动弹出生成的目标项目文件夹
+        if first_proj_dir and os.path.exists(first_proj_dir):
+            try:
+                os.startfile(first_proj_dir)
+            except Exception:
+                pass
+                
+        QMessageBox.information(self, "开工成功", f"🎉 已成功分拣归档并初始化 {created_count} 个工程项目！\n已就绪并打开首个工程目录。")
 
     def install_ai_jsx_script(self):
         src_jsx = os.path.join(os.path.dirname(__file__), "Export_Artboards_To_Textures.jsx")
