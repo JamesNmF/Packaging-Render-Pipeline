@@ -828,42 +828,21 @@ def auto_detect_category_from_name(name):
         return "物料"
     return "包装"
 
-# ----------------- 4 级资产真实时间阶梯算法 -----------------
+# ----------------- 原始开工与立项基准时间提取算法 (以 png / 贴图最早创建时间为准) -----------------
 def get_project_asset_mtime(proj_dir):
+    """
+    计算项目的真实开工/立项时间：
+    1. 优先扫描 png / PNG / 贴图 / 01_Design 等原始贴图与设计源文件目录；
+    2. 取目录创建时间或内部图片的最早创建时间 (Earliest Creation Time)，杜绝后补渲染图时间干扰；
+    3. 次优读取 .blend 三维工程文件的最早时间；
+    4. 兜底取项目文件夹本身的创建时间。
+    """
     if not proj_dir or not os.path.exists(proj_dir):
         return 0
     try:
-        render_candidates = [
-            os.path.join(proj_dir, "04_Renders_通道输出"),
-            os.path.join(proj_dir, "04_Renders_高清分层输出"),
-            os.path.join(proj_dir, "05_Delivery_最终交付"),
-            os.path.join(proj_dir, "05_Final_精修定稿"),
-            os.path.join(proj_dir, "渲染"),
-            os.path.join(proj_dir, "03_输出"),
-            os.path.join(proj_dir, "04_输出"),
-            os.path.join(proj_dir, "Renders"),
-            os.path.join(proj_dir, "renders"),
+        texture_candidates = [
             os.path.join(proj_dir, "png"),
             os.path.join(proj_dir, "PNG"),
-        ]
-        img_exts = ('.png', '.jpg', '.jpeg', '.webp')
-        
-        tier1_max = 0
-        for r_dir in render_candidates:
-            if os.path.exists(r_dir) and os.path.isdir(r_dir):
-                try:
-                    with os.scandir(r_dir) as it:
-                        for entry in it:
-                            if entry.is_file() and entry.name.lower().endswith(img_exts):
-                                m = entry.stat().st_mtime
-                                if m > tier1_max:
-                                    tier1_max = m
-                except Exception:
-                    pass
-        if tier1_max > 0:
-            return tier1_max
-            
-        texture_candidates = [
             os.path.join(proj_dir, "02_Textures_贴图资产"),
             os.path.join(proj_dir, "textures"),
             os.path.join(proj_dir, "Textures"),
@@ -874,22 +853,34 @@ def get_project_asset_mtime(proj_dir):
             os.path.join(proj_dir, "01_源文件"),
             os.path.join(proj_dir, "02_Design_设计原稿"),
         ]
-        tier2_max = 0
-        design_exts = ('.png', '.jpg', '.jpeg', '.webp', '.ai', '.psd', '.pdf')
+        img_exts = ('.png', '.jpg', '.jpeg', '.webp', '.ai', '.psd', '.pdf', '.tif', '.tiff')
+        
+        found_times = []
         for t_dir in texture_candidates:
             if os.path.exists(t_dir) and os.path.isdir(t_dir):
+                d_stat = os.stat(t_dir)
+                d_ctime = getattr(d_stat, 'st_ctime', 0)
+                d_mtime = getattr(d_stat, 'st_mtime', 0)
+                d_time = min(d_ctime, d_mtime) if (d_ctime > 0 and d_mtime > 0) else (d_ctime or d_mtime)
+                if d_time > 0:
+                    found_times.append(d_time)
+                    
                 try:
                     with os.scandir(t_dir) as it:
                         for entry in it:
-                            if entry.is_file() and entry.name.lower().endswith(design_exts):
-                                m = entry.stat().st_mtime
-                                if m > tier2_max:
-                                    tier2_max = m
+                            if entry.is_file() and entry.name.lower().endswith(img_exts):
+                                f_stat = entry.stat()
+                                f_ctime = getattr(f_stat, 'st_ctime', 0)
+                                f_mtime = getattr(f_stat, 'st_mtime', 0)
+                                f_time = min(f_ctime, f_mtime) if (f_ctime > 0 and f_mtime > 0) else (f_ctime or f_mtime)
+                                if f_time > 0:
+                                    found_times.append(f_time)
                 except Exception:
                     pass
-        if tier2_max > 0:
-            return tier2_max
+        if found_times:
+            return min(found_times)
             
+        # 次选：blend 工程文件
         blend_candidates = [
             os.path.join(proj_dir, "03_3D_三维工程"),
             os.path.join(proj_dir, "03_3D_三维模型与场景"),
@@ -898,35 +889,29 @@ def get_project_asset_mtime(proj_dir):
             os.path.join(proj_dir, "3D"),
             proj_dir
         ]
-        tier3_max = 0
+        blend_times = []
         for b_dir in blend_candidates:
             if os.path.exists(b_dir) and os.path.isdir(b_dir):
                 try:
                     with os.scandir(b_dir) as it:
                         for entry in it:
                             if entry.is_file() and entry.name.lower().endswith('.blend'):
-                                m = entry.stat().st_mtime
-                                if m > tier3_max:
-                                    tier3_max = m
+                                f_stat = entry.stat()
+                                f_ctime = getattr(f_stat, 'st_ctime', 0)
+                                f_mtime = getattr(f_stat, 'st_mtime', 0)
+                                f_time = min(f_ctime, f_mtime) if (f_ctime > 0 and f_mtime > 0) else (f_ctime or f_mtime)
+                                if f_time > 0:
+                                    blend_times.append(f_time)
                 except Exception:
                     pass
-        if tier3_max > 0:
-            return tier3_max
+        if blend_times:
+            return min(blend_times)
             
-        tier4_max = 0
-        try:
-            with os.scandir(proj_dir) as it:
-                for entry in it:
-                    if entry.is_file() and entry.name.lower().endswith(('.png', '.jpg', '.jpeg', '.blend', '.ai', '.psd')):
-                        m = entry.stat().st_mtime
-                        if m > tier4_max:
-                            tier4_max = m
-        except Exception:
-            pass
-        if tier4_max > 0:
-            return tier4_max
-            
-        return os.path.getmtime(proj_dir)
+        # 兜底：项目目录本身创建时间
+        p_stat = os.stat(proj_dir)
+        p_ctime = getattr(p_stat, 'st_ctime', 0)
+        p_mtime = getattr(p_stat, 'st_mtime', 0)
+        return min(p_ctime, p_mtime) if (p_ctime > 0 and p_mtime > 0) else (p_ctime or p_mtime)
     except Exception:
         return 0
 
