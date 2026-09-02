@@ -2593,109 +2593,178 @@ class WeeklyReportDialog(QDialog):
         try:
             import openpyxl
             from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            from copy import copy
             
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "工作汇报"
-            ws.views.sheetView[0].showGridLines = True
+            # 优先查找蓝本模板文件
+            tpl_candidates = [
+                os.path.join(os.path.dirname(__file__), "weekly_report_template.xlsx"),
+                r"C:\Users\qq424\Packaging_Tools\weekly_report_template.xlsx",
+                r"C:\Users\qq424\Downloads\2024-11-11至2021-11-16.xlsx"
+            ]
+            template_path = next((p for p in tpl_candidates if os.path.exists(p)), None)
             
-            # 边框样式
-            thin_border = Border(
-                left=Side(style="thin", color="D1D5DB"),
-                right=Side(style="thin", color="D1D5DB"),
-                top=Side(style="thin", color="D1D5DB"),
-                bottom=Side(style="thin", color="D1D5DB")
-            )
-            
-            # 1. 标题行 A1:F1
-            ws.merge_cells("A1:F1")
-            cell_title = ws["A1"]
-            cell_title.value = "工 作 汇 报"
-            cell_title.font = Font(name="Microsoft YaHei", size=16, bold=True)
-            cell_title.alignment = Alignment(horizontal="center", vertical="center")
-            ws.row_dimensions[1].height = 42
-            
-            for col in range(1, 7):
-                ws.cell(row=1, column=col).border = thin_border
+            if template_path:
+                wb = openpyxl.load_workbook(template_path)
+                ws = wb.active
                 
-            # 2. 汇报信息行
-            today = datetime.datetime.now()
-            today_str = f"{today.year}/{today.month}/{today.day}"
-            
-            ws["A2"] = "汇报人："
-            ws["B2"] = "部门："
-            ws["C2"] = "职务："
-            ws["D2"] = f"汇报日期：{today_str}"
-            ws.row_dimensions[2].height = 24
-            
-            for col in range(1, 7):
-                c = ws.cell(row=2, column=col)
-                c.font = Font(name="Microsoft YaHei", size=10)
-                c.alignment = Alignment(horizontal="left" if col < 4 else "left", vertical="center")
-                c.border = thin_border
+                # 记录第 4 行的基础样式
+                row4_styles = []
+                for col in range(1, 7):
+                    c = ws.cell(row=4, column=col)
+                    row4_styles.append({
+                        "font": copy(c.font) if c.font else None,
+                        "alignment": copy(c.alignment) if c.alignment else None,
+                        "border": copy(c.border) if c.border else None,
+                        "number_format": c.number_format or "General"
+                    })
+                    
+                # 清空第 4 行向下已有的旧数据
+                for r in range(4, max(ws.max_row + 1, 40)):
+                    for c in range(1, 7):
+                        ws.cell(row=r, column=c).value = None
+                        
+                # 更新汇报日期
+                today = datetime.datetime.now()
+                today_str = f"{today.year}/{today.month}/{today.day}"
+                ws["E2"] = f"汇报日期：{today_str}"
                 
-            # 3. 表头行 A3:F3
-            headers = ["序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"]
-            ws.row_dimensions[3].height = 26
-            header_fill = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
-            
-            for col_idx, h in enumerate(headers, start=1):
-                c = ws.cell(row=3, column=col_idx, value=h)
-                c.font = Font(name="Microsoft YaHei", size=10, bold=True)
-                c.alignment = Alignment(horizontal="center", vertical="center")
-                c.fill = header_fill
-                c.border = thin_border
+                # 填入勾选的数据项
+                for idx, it in enumerate(active, start=4):
+                    ws.row_dimensions[idx].height = 36.0
+                    
+                    # 序号
+                    c1 = ws.cell(row=idx, column=1, value=it["seq"])
+                    # 工作内容
+                    c2 = ws.cell(row=idx, column=2, value=it["content"])
+                    # 紧急程度
+                    c3 = ws.cell(row=idx, column=3, value=it["urgency"])
+                    
+                    # 计划完成时间 (尝试转换为 date 对象)
+                    raw_d = it["plan_date"]
+                    d_val = raw_d
+                    try:
+                        parts = [int(p) for p in raw_d.split("/")]
+                        if len(parts) == 3:
+                            d_val = datetime.datetime(parts[0], parts[1], parts[2])
+                    except Exception:
+                        pass
+                    c4 = ws.cell(row=idx, column=4, value=d_val)
+                    
+                    # 完成进度 (数值 1.0 或 0.8)
+                    prog_str = it["progress"].replace("%", "").strip()
+                    try:
+                        p_val = float(prog_str) / 100.0
+                    except Exception:
+                        p_val = 1.0
+                    c5 = ws.cell(row=idx, column=5, value=p_val)
+                    
+                    # 备注
+                    c6 = ws.cell(row=idx, column=6, value=it["remark"])
+                    
+                    # 应用基础样式
+                    cells = [c1, c2, c3, c4, c5, c6]
+                    for col_i, cell in enumerate(cells):
+                        st = row4_styles[col_i]
+                        if st["font"]:
+                            cell.font = copy(st["font"])
+                        if st["alignment"]:
+                            cell.alignment = copy(st["alignment"])
+                        if st["border"]:
+                            cell.border = copy(st["border"])
+                        cell.number_format = st["number_format"]
+                        
+            else:
+                # 模板不存在时使用原生标准样式创建
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "工作汇报"
+                ws.views.sheetView[0].showGridLines = True
                 
-            # 4. 数据行
-            green_fill = PatternFill(start_color="86EFAC", end_color="86EFAC", fill_type="solid")  # 柔和浅绿
-            
-            for r_idx, it in enumerate(active, start=4):
-                ws.row_dimensions[r_idx].height = 24
+                thin_border = Border(
+                    left=Side(style="thin", color="D1D5DB"),
+                    right=Side(style="thin", color="D1D5DB"),
+                    top=Side(style="thin", color="D1D5DB"),
+                    bottom=Side(style="thin", color="D1D5DB")
+                )
                 
-                # 序号
-                c1 = ws.cell(row=r_idx, column=1, value=it["seq"])
-                c1.alignment = Alignment(horizontal="center", vertical="center")
-                c1.font = Font(name="Microsoft YaHei", size=10)
-                c1.border = thin_border
+                ws.merge_cells("A1:F1")
+                cell_title = ws["A1"]
+                cell_title.value = "工 作 汇 报"
+                cell_title.font = Font(name="Microsoft YaHei", size=16, bold=True)
+                cell_title.alignment = Alignment(horizontal="center", vertical="center")
+                ws.row_dimensions[1].height = 42
                 
-                # 工作内容
-                c2 = ws.cell(row=r_idx, column=2, value=it["content"])
-                c2.alignment = Alignment(horizontal="left", vertical="center")
-                c2.font = Font(name="Microsoft YaHei", size=10)
-                c2.border = thin_border
+                for col in range(1, 7):
+                    ws.cell(row=1, column=col).border = thin_border
+                    
+                today = datetime.datetime.now()
+                today_str = f"{today.year}/{today.month}/{today.day}"
                 
-                # 紧急程度
-                c3 = ws.cell(row=r_idx, column=3, value=it["urgency"])
-                c3.alignment = Alignment(horizontal="center", vertical="center")
-                c3.font = Font(name="Microsoft YaHei", size=10)
-                c3.border = thin_border
+                ws["A2"] = "汇报人："
+                ws["B2"] = "部门："
+                ws["C2"] = "职务："
+                ws["D2"] = f"汇报日期：{today_str}"
+                ws.row_dimensions[2].height = 24
                 
-                # 计划完成时间
-                c4 = ws.cell(row=r_idx, column=4, value=it["plan_date"])
-                c4.alignment = Alignment(horizontal="center", vertical="center")
-                c4.font = Font(name="Microsoft YaHei", size=10)
-                c4.border = thin_border
+                for col in range(1, 7):
+                    c = ws.cell(row=2, column=col)
+                    c.font = Font(name="Microsoft YaHei", size=10)
+                    c.alignment = Alignment(horizontal="left", vertical="center")
+                    c.border = thin_border
+                    
+                headers = ["序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"]
+                ws.row_dimensions[3].height = 26
+                header_fill = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
                 
-                # 完成进度
-                c5 = ws.cell(row=r_idx, column=5, value=it["progress"])
-                c5.alignment = Alignment(horizontal="center", vertical="center")
-                c5.font = Font(name="Microsoft YaHei", size=10, bold=True)
-                c5.fill = green_fill
-                c5.border = thin_border
+                for col_idx, h in enumerate(headers, start=1):
+                    c = ws.cell(row=3, column=col_idx, value=h)
+                    c.font = Font(name="Microsoft YaHei", size=10, bold=True)
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                    c.fill = header_fill
+                    c.border = thin_border
+                    
+                green_fill = PatternFill(start_color="86EFAC", end_color="86EFAC", fill_type="solid")
                 
-                # 备注
-                c6 = ws.cell(row=r_idx, column=6, value=it["remark"])
-                c6.alignment = Alignment(horizontal="left", vertical="center")
-                c6.font = Font(name="Microsoft YaHei", size=10)
-                c6.border = thin_border
-                
-            # 设置列宽
-            ws.column_dimensions["A"].width = 8
-            ws.column_dimensions["B"].width = 44
-            ws.column_dimensions["C"].width = 12
-            ws.column_dimensions["D"].width = 16
-            ws.column_dimensions["E"].width = 14
-            ws.column_dimensions["F"].width = 18
+                for r_idx, it in enumerate(active, start=4):
+                    ws.row_dimensions[r_idx].height = 28
+                    
+                    c1 = ws.cell(row=r_idx, column=1, value=it["seq"])
+                    c1.alignment = Alignment(horizontal="center", vertical="center")
+                    c1.font = Font(name="Microsoft YaHei", size=10)
+                    c1.border = thin_border
+                    
+                    c2 = ws.cell(row=r_idx, column=2, value=it["content"])
+                    c2.alignment = Alignment(horizontal="left", vertical="center")
+                    c2.font = Font(name="Microsoft YaHei", size=10)
+                    c2.border = thin_border
+                    
+                    c3 = ws.cell(row=r_idx, column=3, value=it["urgency"])
+                    c3.alignment = Alignment(horizontal="center", vertical="center")
+                    c3.font = Font(name="Microsoft YaHei", size=10)
+                    c3.border = thin_border
+                    
+                    c4 = ws.cell(row=r_idx, column=4, value=it["plan_date"])
+                    c4.alignment = Alignment(horizontal="center", vertical="center")
+                    c4.font = Font(name="Microsoft YaHei", size=10)
+                    c4.border = thin_border
+                    
+                    c5 = ws.cell(row=r_idx, column=5, value=it["progress"])
+                    c5.alignment = Alignment(horizontal="center", vertical="center")
+                    c5.font = Font(name="Microsoft YaHei", size=10, bold=True)
+                    c5.fill = green_fill
+                    c5.border = thin_border
+                    
+                    c6 = ws.cell(row=r_idx, column=6, value=it["remark"])
+                    c6.alignment = Alignment(horizontal="left", vertical="center")
+                    c6.font = Font(name="Microsoft YaHei", size=10)
+                    c6.border = thin_border
+                    
+                ws.column_dimensions["A"].width = 8
+                ws.column_dimensions["B"].width = 44
+                ws.column_dimensions["C"].width = 12
+                ws.column_dimensions["D"].width = 16
+                ws.column_dimensions["E"].width = 14
+                ws.column_dimensions["F"].width = 18
             
             wb.save(save_path)
             wb.close()
