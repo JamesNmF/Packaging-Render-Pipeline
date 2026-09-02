@@ -153,6 +153,83 @@ def get_valid_template_blend(cfg=None):
 
 DEFAULT_TEMPLATE = get_valid_template_blend()
 
+def normalize_workspaces(cfg):
+    """
+    统一规范化工作盘配置：
+    兼容旧版本 ["E:\\zjc", "D:\\Projects"] 与新版本 [{"path": "E:\\zjc", "alias": "主力生产盘", "is_primary": True}, ...]
+    """
+    raw_v2 = cfg.get("workspaces_v2", [])
+    raw_ws = cfg.get("workspaces", [])
+    
+    ws_list = []
+    seen = set()
+    
+    if raw_v2 and isinstance(raw_v2, list):
+        for item in raw_v2:
+            if isinstance(item, dict) and item.get("path"):
+                norm_p = os.path.normpath(item["path"])
+                if norm_p.lower() not in seen:
+                    seen.add(norm_p.lower())
+                    alias = item.get("alias") or ("主力生产盘" if len(ws_list) == 0 else (os.path.basename(norm_p) or norm_p))
+                    ws_list.append({
+                        "path": norm_p,
+                        "alias": alias,
+                        "is_primary": bool(item.get("is_primary", False))
+                    })
+                    
+    if raw_ws and isinstance(raw_ws, list):
+        for p in raw_ws:
+            if isinstance(p, str) and p:
+                norm_p = os.path.normpath(p)
+                if norm_p.lower() not in seen:
+                    seen.add(norm_p.lower())
+                    alias = "主力生产盘" if len(ws_list) == 0 else (os.path.basename(norm_p) or norm_p)
+                    ws_list.append({
+                        "path": norm_p,
+                        "alias": alias,
+                        "is_primary": (len(ws_list) == 0)
+                    })
+                    
+    if not ws_list:
+        for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects"]:
+            if os.path.exists(p):
+                ws_list.append({"path": os.path.normpath(p), "alias": "主力生产盘", "is_primary": True})
+                break
+        if not ws_list:
+            ws_list.append({"path": "E:\\zjc", "alias": "主力生产盘", "is_primary": True})
+            
+    if not any(w.get("is_primary") for w in ws_list) and ws_list:
+        ws_list[0]["is_primary"] = True
+        
+    cfg["workspaces_v2"] = ws_list
+    cfg["workspaces"] = [w["path"] for w in ws_list]
+    return ws_list
+
+def get_workspace_alias(ws_path, cfg=None):
+    if not ws_path:
+        return "未知盘符"
+    norm_p = os.path.normpath(ws_path).lower()
+    if cfg and cfg.get("workspaces_v2"):
+        for item in cfg["workspaces_v2"]:
+            if os.path.normpath(item.get("path", "")).lower() == norm_p:
+                return item.get("alias") or ws_path
+    drive = os.path.splitdrive(ws_path)[0].upper()
+    return f"{drive}盘 ({os.path.basename(ws_path)})"
+
+def get_drive_space_info(path):
+    """获取指定路径所在盘符的可用空间与总空间"""
+    if not path or not os.path.exists(path):
+        return False, "⚠️ 盘符离线 / 未连接", 0
+    try:
+        import shutil
+        total, used, free = shutil.disk_usage(path)
+        total_gb = total / (1024 ** 3)
+        free_gb = free / (1024 ** 3)
+        used_percent = int((used / total) * 100) if total > 0 else 0
+        return True, f"可用 {free_gb:.1f} GB / 共 {total_gb:.1f} GB", used_percent
+    except Exception:
+        return False, "⚠️ 盘符读取受限", 0
+
 DEFAULT_WORKSPACES = []
 for p in ["E:\\zjc", "D:\\Projects", "E:\\Projects"]:
     if os.path.exists(p) and p not in DEFAULT_WORKSPACES:
@@ -915,11 +992,14 @@ def get_project_asset_mtime(proj_dir):
     except Exception:
         return 0
 
-def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignored_brands=None):
+def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignored_brands=None, ws_alias=""):
     if not ws_root or not os.path.exists(ws_root):
         return []
     projects = []
     cache_dirty = False
+    norm_ws = os.path.normpath(ws_root)
+    drive_l = os.path.splitdrive(norm_ws)[0].upper()
+    ws_tag = f"{drive_l}:{ws_alias[:2]}" if ws_alias else f"{drive_l}盘"
     
     try:
         entries = os.listdir(ws_root)
@@ -968,7 +1048,10 @@ def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignore
                             "path": sku_p,
                             "thumbnail": cached_item.get("thumbnail"),
                             "time": "",
-                            "mtime": s_mtime
+                            "mtime": s_mtime,
+                            "ws_path": norm_ws,
+                            "ws_alias": ws_alias,
+                            "ws_tag": ws_tag
                         })
                     else:
                         thumb = find_project_thumbnail(sku_p)
@@ -991,7 +1074,10 @@ def scan_workspace_projects_fast(ws_root, meta_cache, brand_aliases=None, ignore
                             "path": sku_p,
                             "thumbnail": thumb,
                             "time": "",
-                            "mtime": s_mtime
+                            "mtime": s_mtime,
+                            "ws_path": norm_ws,
+                            "ws_alias": ws_alias,
+                            "ws_tag": ws_tag
                         })
             except (PermissionError, OSError):
                 continue
@@ -1030,7 +1116,10 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
             "row_idx": ep.get("row_idx", 0),
             "path": real_disk_path,
             "thumbnail": (matched_dp["thumbnail"] if matched_dp and matched_dp.get("thumbnail") and is_valid_beauty_thumbnail(matched_dp["thumbnail"]) else None) or ep.get("thumbnail"),
-            "mtime": (matched_dp["mtime"] if matched_dp and matched_dp.get("mtime") else 0) or ep.get("mtime", 0)
+            "mtime": (matched_dp["mtime"] if matched_dp and matched_dp.get("mtime") else 0) or ep.get("mtime", 0),
+            "ws_path": matched_dp.get("ws_path", "") if matched_dp else (os.path.splitdrive(real_disk_path)[0] if real_disk_path else ""),
+            "ws_alias": matched_dp.get("ws_alias", "") if matched_dp else "",
+            "ws_tag": matched_dp.get("ws_tag", "") if matched_dp else ""
         }
         if matched_dp:
             matched_disk_paths.add(matched_dp["path"].lower().replace("/", "\\"))
@@ -1052,7 +1141,10 @@ def merge_excel_and_disk_projects(excel_projects, disk_projects):
                 "row_idx": 0,
                 "path": dp["path"],
                 "thumbnail": dp.get("thumbnail"),
-                "mtime": dp.get("mtime", 0)
+                "mtime": dp.get("mtime", 0),
+                "ws_path": dp.get("ws_path", ""),
+                "ws_alias": dp.get("ws_alias", ""),
+                "ws_tag": dp.get("ws_tag", "")
             })
             
     merged.sort(key=lambda x: x["mtime"], reverse=True)
@@ -1198,10 +1290,10 @@ class DataLoaderSignals(QObject):
     finished = Signal(list, list, list)
 
 class DataLoaderWorker(QRunnable):
-    def __init__(self, excel_path, workspace, meta_cache, brand_aliases=None, ignored_brands=None):
+    def __init__(self, excel_path, workspaces_v2, meta_cache, brand_aliases=None, ignored_brands=None):
         super().__init__()
         self.excel_path = excel_path
-        self.workspace = workspace
+        self.workspaces_v2 = workspaces_v2 if isinstance(workspaces_v2, list) else [{"path": workspaces_v2, "alias": "主力生产盘", "is_primary": True}]
         self.meta_cache = meta_cache
         self.brand_aliases = brand_aliases
         self.ignored_brands = ignored_brands
@@ -1210,7 +1302,20 @@ class DataLoaderWorker(QRunnable):
     def run(self):
         try:
             excel_p = parse_and_cache_excel(self.excel_path, self.brand_aliases, self.ignored_brands) if (self.excel_path and os.path.exists(self.excel_path)) else []
-            disk_p = scan_workspace_projects_fast(self.workspace, self.meta_cache, self.brand_aliases, self.ignored_brands) if (self.workspace and os.path.exists(self.workspace)) else []
+            disk_p = []
+            for ws_info in self.workspaces_v2:
+                if isinstance(ws_info, dict):
+                    ws_path = ws_info.get("path")
+                    ws_alias = ws_info.get("alias", "")
+                else:
+                    ws_path = str(ws_info)
+                    ws_alias = ""
+                if ws_path and os.path.exists(ws_path):
+                    sub_projs = scan_workspace_projects_fast(
+                        ws_path, self.meta_cache, self.brand_aliases, self.ignored_brands, ws_alias=ws_alias
+                    )
+                    disk_p.extend(sub_projs)
+            disk_p.sort(key=lambda x: x["mtime"], reverse=True)
             merged = merge_excel_and_disk_projects(excel_p, disk_p)
             self.signals.finished.emit(excel_p, disk_p, merged)
         except Exception:
@@ -1590,6 +1695,23 @@ class GalleryCardDelegate(QStyledItemDelegate):
                 task.signals.finished.connect(self.on_image_loaded)
                 self.thread_pool.start(task)
 
+        # 缩略图右下角浮动工作盘角标 (如 E:主力, D:归档)
+        ws_tag = proj.get("ws_tag", "")
+        if not ws_tag and proj.get("path"):
+            drive_l = os.path.splitdrive(proj["path"])[0].upper()
+            ws_tag = f"{drive_l}盘"
+        if ws_tag:
+            ws_badge_rect = QRect(thumb_rect.right() - 50, thumb_rect.bottom() - 17, 46, 15)
+            ws_path = QPainterPath()
+            ws_path.addRoundedRect(QRectF(ws_badge_rect), 3, 3)
+            painter.fillPath(ws_path, QColor(0, 0, 0, 160))
+            painter.setPen(QColor("#F1F3F5"))
+            font_ws = QFont(painter.font())
+            font_ws.setPointSize(7)
+            font_ws.setBold(True)
+            painter.setFont(font_ws)
+            painter.drawText(ws_badge_rect, Qt.AlignCenter, ws_tag)
+
         cat_val = proj.get("cat", "包装")
         brand_val = proj.get("brand", "")
         sku_val = proj.get("sku", "")
@@ -1968,6 +2090,182 @@ class FolderRuleManagerDialog(QDialog):
         self.active_rule_id = self.rules[self.current_idx]["id"]
         self.accept()
 
+# ----------------- 工作盘空间管理中枢弹窗 -----------------
+class WorkspaceHubDialog(QDialog):
+    """
+    工作盘空间管理中枢：
+    管理多个工作盘、修改别名、切换主力开工盘、查看硬盘容量与在线状态
+    """
+    workspaces_changed = Signal(list)
+
+    def __init__(self, cfg, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🗄️ 工作盘空间管理中枢 (Workspace Hub)")
+        self.resize(760, 480)
+        self.setMinimumSize(660, 400)
+        self.cfg = cfg
+        self.workspaces_v2 = [dict(w) for w in normalize_workspaces(cfg)]
+        self.build_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        tip_lbl = QLabel("💡 <b>提示</b>：您可以添加多个物理硬盘/项目目录，并为它们设置清晰的别名（如主力生产盘、2024归档库）。看板支持一键在不同工作盘之间自由切换。")
+        tip_lbl.setWordWrap(True)
+        tip_lbl.setStyleSheet("color: #9BA1B0; padding-bottom: 4px;")
+        layout.addWidget(tip_lbl)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["状态", "工作盘别名", "物理路径", "磁盘空间", "主力开工盘"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        layout.addWidget(self.table)
+
+        self.refresh_table()
+
+        btn_bar = QHBoxLayout()
+        btn_add = QPushButton("➕ 绑定新工作盘")
+        btn_add.clicked.connect(self.add_workspace)
+        btn_rename = QPushButton("✏️ 修改别名")
+        btn_rename.clicked.connect(self.rename_workspace)
+        btn_set_primary = QPushButton("⭐ 设为主力开工盘")
+        btn_set_primary.clicked.connect(self.set_primary_workspace)
+        btn_del = QPushButton("🗑️ 移除工作盘")
+        btn_del.clicked.connect(self.delete_workspace)
+        btn_bar.addWidget(btn_add)
+        btn_bar.addWidget(btn_rename)
+        btn_bar.addWidget(btn_set_primary)
+        btn_bar.addWidget(btn_del)
+        btn_bar.addStretch()
+        layout.addLayout(btn_bar)
+
+        bottom_bar = QHBoxLayout()
+        btn_save = QPushButton("💾 保存并立即全盘重扫")
+        btn_save.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 8px 18px;")
+        btn_save.clicked.connect(self.save_and_close)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        bottom_bar.addStretch()
+        bottom_bar.addWidget(btn_cancel)
+        bottom_bar.addWidget(btn_save)
+        layout.addLayout(bottom_bar)
+
+    def refresh_table(self):
+        self.table.setRowCount(len(self.workspaces_v2))
+        for row, ws in enumerate(self.workspaces_v2):
+            p = ws.get("path", "")
+            alias = ws.get("alias", "")
+            is_primary = ws.get("is_primary", False)
+            
+            is_online, space_str, _ = get_drive_space_info(p)
+            
+            # 状态
+            status_item = QTableWidgetItem("🟢 在线" if is_online else "🔴 离线")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            if not is_online:
+                status_item.setForeground(QColor("#EF4444"))
+            else:
+                status_item.setForeground(QColor("#10B981"))
+            self.table.setItem(row, 0, status_item)
+            
+            # 别名
+            alias_item = QTableWidgetItem(alias)
+            alias_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            self.table.setItem(row, 1, alias_item)
+            
+            # 路径
+            path_item = QTableWidgetItem(p)
+            self.table.setItem(row, 2, path_item)
+            
+            # 容量
+            space_item = QTableWidgetItem(space_str)
+            space_item.setForeground(QColor("#9BA1B0"))
+            self.table.setItem(row, 3, space_item)
+            
+            # 主力盘
+            prim_item = QTableWidgetItem("⭐ 主力开工" if is_primary else "—")
+            prim_item.setTextAlignment(Qt.AlignCenter)
+            if is_primary:
+                prim_item.setForeground(QColor("#F59E0B"))
+            self.table.setItem(row, 4, prim_item)
+
+    def add_workspace(self):
+        d = QFileDialog.getExistingDirectory(self, "选择要绑定的新工作盘目录")
+        if d:
+            norm_d = os.path.normpath(d)
+            if any(os.path.normpath(w["path"]).lower() == norm_d.lower() for w in self.workspaces_v2):
+                QMessageBox.warning(self, "提示", "该工作盘已在列表中！")
+                return
+            default_alias = os.path.basename(norm_d) or norm_d
+            alias, ok = QInputDialog.getText(self, "设置别名", f"为该工作盘设置易记别名 (如：{default_alias}):", text=default_alias)
+            if ok:
+                alias_str = alias.strip() or default_alias
+                self.workspaces_v2.append({
+                    "path": norm_d,
+                    "alias": alias_str,
+                    "is_primary": (len(self.workspaces_v2) == 0)
+                })
+                self.refresh_table()
+
+    def rename_workspace(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.workspaces_v2):
+            QMessageBox.warning(self, "提示", "请先在列表中选中一个工作盘！")
+            return
+        ws = self.workspaces_v2[row]
+        cur_alias = ws.get("alias", "")
+        new_alias, ok = QInputDialog.getText(self, "修改工作盘别名", f"修改 [{ws['path']}] 的显示别名:", text=cur_alias)
+        if ok and new_alias.strip():
+            ws["alias"] = new_alias.strip()
+            self.refresh_table()
+
+    def set_primary_workspace(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.workspaces_v2):
+            QMessageBox.warning(self, "提示", "请先在列表中选中一个工作盘！")
+            return
+        for idx, w in enumerate(self.workspaces_v2):
+            w["is_primary"] = (idx == row)
+        self.refresh_table()
+
+    def delete_workspace(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.workspaces_v2):
+            QMessageBox.warning(self, "提示", "请先在列表中选中一个工作盘！")
+            return
+        if len(self.workspaces_v2) <= 1:
+            QMessageBox.warning(self, "提示", "至少需要保留一个工作盘！")
+            return
+        ws = self.workspaces_v2[row]
+        reply = QMessageBox.question(self, "确认移除", f"确定要移除工作盘 [{ws.get('alias')}] ({ws['path']}) 吗？\n（物理磁盘中的文件不会被删除）", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            was_primary = ws.get("is_primary", False)
+            self.workspaces_v2.pop(row)
+            if was_primary and self.workspaces_v2:
+                self.workspaces_v2[0]["is_primary"] = True
+            self.refresh_table()
+
+    def save_and_close(self):
+        self.cfg["workspaces_v2"] = self.workspaces_v2
+        self.cfg["workspaces"] = [w["path"] for w in self.workspaces_v2]
+        save_config(self.cfg)
+        self.workspaces_changed.emit(self.workspaces_v2)
+        self.accept()
+
 # ----------------- Qt6 工业级主窗口 -----------------
 class MainWindow(QMainWindow):
     initial_load_done = Signal()
@@ -1981,7 +2279,8 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
         self.meta_cache = load_meta_cache()
         self.current_theme = self.cfg.get("theme", "dark")
-        self.workspaces = self.cfg.get("workspaces", DEFAULT_WORKSPACES)
+        self.workspaces_v2 = normalize_workspaces(self.cfg)
+        self.workspaces = [w["path"] for w in self.workspaces_v2]
         
         self.curated_brands = self.cfg.get("curated_brands", DEFAULT_CONFIG["curated_brands"])
         self.ignored_brands = self.cfg.get("ignored_brands", DEFAULT_IGNORED_BRANDS)
@@ -2005,6 +2304,8 @@ class MainWindow(QMainWindow):
         
         self.setup_ui()
         self.apply_theme()
+        self.update_workspace_filter_combo()
+        self.update_organizer_ws_combo()
         
         cached_disk = list(self.meta_cache.values())
         if cached_disk:
@@ -2139,14 +2440,25 @@ class MainWindow(QMainWindow):
         gal_layout.setSpacing(8)
 
         filter_bar = QHBoxLayout()
+        filter_bar.setSpacing(8)
+
+        # 1. 🗄️ 工作空间选择器
+        self.ws_combo = QComboBox()
+        self.ws_combo.setMinimumWidth(180)
+        self.ws_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.ws_combo.currentIndexChanged.connect(self.on_workspace_filter_changed)
+
+        # 2. 🔍 搜索框
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("🔍 搜索产品 SKU / 品牌 / 类别...")
         self.search_edit.textChanged.connect(self.apply_filter)
         
+        # 3. 视图模式
         self.view_combo = QComboBox()
         self.view_combo.addItems(["⚡ 智能融合视图", "📊 仅 Excel 台账", "💾 仅工作盘扫描"])
         self.view_combo.currentIndexChanged.connect(self.on_view_mode_changed)
 
+        # 4. 排序
         self.sort_combo = QComboBox()
         self.sort_combo.addItems([
             "⏱️ 最新修改时间 (从新到旧)",
@@ -2156,9 +2468,17 @@ class MainWindow(QMainWindow):
         ])
         self.sort_combo.currentIndexChanged.connect(self.apply_filter)
 
-        filter_bar.addWidget(self.search_edit, stretch=3)
+        # 5. 🗄️ 工作盘管理按钮
+        btn_manage_ws = QToolButton()
+        btn_manage_ws.setText("🗄️ 工作盘管理")
+        btn_manage_ws.setToolTip("管理工作盘、修改别名、查看磁盘空间与挂载状态")
+        btn_manage_ws.clicked.connect(self.open_workspace_manager)
+
+        filter_bar.addWidget(self.ws_combo, stretch=2)
+        filter_bar.addWidget(self.search_edit, stretch=4)
         filter_bar.addWidget(self.view_combo, stretch=1)
         filter_bar.addWidget(self.sort_combo, stretch=1)
+        filter_bar.addWidget(btn_manage_ws)
         gal_layout.addLayout(filter_bar)
 
         self.gallery_view = SmoothGalleryView()
@@ -2194,12 +2514,9 @@ class MainWindow(QMainWindow):
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("主工作盘:"))
         self.combo_ws = QComboBox()
-        self.combo_ws.addItems(self.workspaces)
-        cur_ws = self.cfg.get("current_workspace", self.workspaces[0])
-        self.combo_ws.setCurrentText(cur_ws)
         self.combo_ws.currentTextChanged.connect(self.on_organizer_setting_changed)
-        btn_add_ws = QPushButton("➕ 绑定新工作盘")
-        btn_add_ws.clicked.connect(self.add_workspace)
+        btn_add_ws = QPushButton("🗄️ 工作盘管理...")
+        btn_add_ws.clicked.connect(self.open_workspace_manager)
         row1.addWidget(self.combo_ws, stretch=1)
         row1.addWidget(btn_add_ws)
         g1_layout.addLayout(row1)
@@ -2394,13 +2711,76 @@ class MainWindow(QMainWindow):
             self.update_organizer_brand_combo()
             QMessageBox.information(self, "设置成功", f"已将 [{brand_name}] 设为默认开工品牌！")
 
+    # ---------------- 工作盘空间多维管理与联动 ----------------
+    def open_workspace_manager(self):
+        dlg = WorkspaceHubDialog(self.cfg, self)
+        dlg.workspaces_changed.connect(self.on_workspaces_updated)
+        dlg.exec()
+
+    def on_workspaces_updated(self, new_workspaces_v2):
+        self.workspaces_v2 = new_workspaces_v2
+        self.workspaces = [w["path"] for w in self.workspaces_v2]
+        self.update_organizer_ws_combo()
+        self.update_workspace_filter_combo()
+        self.async_load_data()
+
+    def update_workspace_filter_combo(self):
+        if not hasattr(self, "ws_combo"):
+            return
+        self.ws_combo.blockSignals(True)
+        cur_data = self.ws_combo.currentData()
+        self.ws_combo.clear()
+        
+        total_projs = len(self.merged_projects)
+        self.ws_combo.addItem(f"🌐 全部工作盘 (全景联合 - {total_projs})", "")
+        
+        target_idx = 0
+        for idx, ws in enumerate(self.workspaces_v2, start=1):
+            p = ws.get("path", "")
+            alias = ws.get("alias", "")
+            is_prim = ws.get("is_primary", False)
+            norm_p = os.path.normpath(p).lower()
+            
+            p_count = sum(1 for proj in self.merged_projects if os.path.normpath(proj.get("ws_path", "")).lower() == norm_p or os.path.normpath(proj.get("path", "")).lower().startswith(norm_p))
+            icon_str = "⭐" if is_prim else "📁"
+            self.ws_combo.addItem(f"{icon_str} {alias} ({p_count})", p)
+            if cur_data and os.path.normpath(cur_data).lower() == norm_p:
+                target_idx = idx
+                
+        self.ws_combo.setCurrentIndex(target_idx)
+        self.ws_combo.blockSignals(False)
+
+    def update_organizer_ws_combo(self):
+        if not hasattr(self, "combo_ws"):
+            return
+        self.combo_ws.blockSignals(True)
+        self.combo_ws.clear()
+        
+        cur_ws = self.cfg.get("current_workspace", "")
+        target_idx = 0
+        
+        for idx, ws in enumerate(self.workspaces_v2):
+            p = ws.get("path", "")
+            alias = ws.get("alias", "")
+            is_prim = ws.get("is_primary", False)
+            label = f"{'⭐ ' if is_prim else ''}{alias} ({p})"
+            self.combo_ws.addItem(label, p)
+            if (cur_ws and os.path.normpath(cur_ws).lower() == os.path.normpath(p).lower()) or (not cur_ws and is_prim):
+                target_idx = idx
+                
+        self.combo_ws.setCurrentIndex(target_idx)
+        self.combo_ws.blockSignals(False)
+
+    def on_workspace_filter_changed(self):
+        self.update_sidebar_counts()
+        self.apply_filter()
+
     # ---------------- 业务逻辑与数据流 (Qt 线程池 + 信号槽) ----------------
     def async_load_data(self):
-        self.sync_status_lbl.setText("⚡ 正在加载全量资产...")
+        self.sync_status_lbl.setText("⚡ 正在加载全量工作盘资产...")
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
-        cur_ws = self.combo_ws.currentText() if hasattr(self, "combo_ws") else self.workspaces[0]
         
-        worker = DataLoaderWorker(ex_path, cur_ws, self.meta_cache, self.brand_aliases, self.ignored_brands)
+        worker = DataLoaderWorker(ex_path, self.workspaces_v2, self.meta_cache, self.brand_aliases, self.ignored_brands)
         worker.signals.finished.connect(self.on_data_loaded)
         QThreadPool.globalInstance().start(worker)
 
@@ -2416,6 +2796,7 @@ class MainWindow(QMainWindow):
 
     def update_after_data_loaded(self):
         self.sync_status_lbl.setText(f"🟢 极速同步已就绪 (已载入 {len(self.merged_projects)} 个项目)")
+        self.update_workspace_filter_combo()
         self.update_sidebar_counts()
         self.update_active_dataset()
         self.update_organizer_brand_combo()
@@ -2424,6 +2805,13 @@ class MainWindow(QMainWindow):
         mode_idx = self.view_combo.currentIndex()
         dataset = self.merged_projects if mode_idx == 0 else (self.excel_projects if mode_idx == 1 else self.disk_projects)
         
+        # 空间物理隔离过滤
+        if hasattr(self, "ws_combo") and self.ws_combo.currentIndex() > 0:
+            selected_ws_path = self.ws_combo.currentData()
+            if selected_ws_path:
+                norm_sel_ws = os.path.normpath(selected_ws_path).lower()
+                dataset = [p for p in dataset if os.path.normpath(p.get("ws_path", "")).lower() == norm_sel_ws or os.path.normpath(p.get("path", "")).lower().startswith(norm_sel_ws)]
+
         cat_counts = {"全部形态": len(dataset), "包装": 0, "套盒": 0, "海报": 0, "物料": 0}
         brand_counts = {}
         for p in dataset:
@@ -2494,8 +2882,21 @@ class MainWindow(QMainWindow):
 
     def apply_filter(self):
         kw = self.search_edit.text().strip().lower()
+        selected_ws_path = ""
+        if hasattr(self, "ws_combo") and self.ws_combo.currentIndex() > 0:
+            selected_ws_path = self.ws_combo.currentData()
+            norm_sel_ws = os.path.normpath(selected_ws_path).lower() if selected_ws_path else ""
+        else:
+            norm_sel_ws = ""
+
         res = []
         for p in self.current_display_list:
+            if norm_sel_ws:
+                p_ws = os.path.normpath(p.get("ws_path", "")).lower()
+                p_path = os.path.normpath(p.get("path", "")).lower()
+                if not (p_ws == norm_sel_ws or p_path.startswith(norm_sel_ws)):
+                    continue
+
             cat = p.get("cat", "包装")
             brand = p.get("brand", "").strip() or "未分类品牌"
             raw_brand = p.get("raw_brand", brand).strip()
