@@ -75,7 +75,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
+    QGridLayout, QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
