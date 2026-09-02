@@ -79,7 +79,8 @@ from PySide6.QtWidgets import (
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
-    QProgressBar, QSplashScreen, QToolButton, QProgressDialog, QSystemTrayIcon
+    QProgressBar, QSplashScreen, QToolButton, QProgressDialog, QSystemTrayIcon,
+    QRadioButton, QButtonGroup
 )
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
@@ -1918,6 +1919,290 @@ class ExcelSyncWorker(QRunnable):
         except Exception as e:
             self.signals.finished.emit(False, f"同步 Excel 缩略图发生异常: {str(e)}")
 
+# ----------------- 全量资产自动填充/同步到 Excel 引擎 -----------------
+class ExcelFullFillSignals(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(bool, dict, str)
+
+class ExcelFullFillWorker(QRunnable):
+    def __init__(self, excel_path, projects, options):
+        super().__init__()
+        self.excel_path = excel_path
+        self.projects = projects
+        self.options = options
+        self.signals = ExcelFullFillSignals()
+        self.is_cancelled = False
+
+    def cancel(self):
+        self.is_cancelled = True
+
+    def run(self):
+        if not self.projects:
+            self.signals.finished.emit(False, {}, "没有需要同步的资产项目！")
+            return
+
+        total = len(self.projects)
+        added_count = 0
+        img_count = 0
+        updated_count = 0
+
+        try:
+            import openpyxl
+            from openpyxl.drawing.image import Image as OpenpyxlImage
+            from PIL import Image as PILImage
+            from openpyxl.utils import get_column_letter
+
+            wb = openpyxl.load_workbook(self.excel_path)
+            sheet = wb.active
+
+            # 1. 解析表头映射
+            headers = [str(cell.value or "").strip() for cell in sheet[1]]
+            seq_col = None
+            sku_col = None
+            img_col = None
+            cat_col = None
+            brand_col = None
+            path_col = None
+            time_col = None
+
+            for col_idx, h in enumerate(headers, start=1):
+                if h in ("序号", "ID", "No", "编号", "No."):
+                    seq_col = col_idx
+                elif h in ("产品命名", "产品名称", "SKU", "品名", "项目名称", "产品"):
+                    sku_col = col_idx
+                elif h in ("图片", "效果图", "缩略图", "渲染图", "成片", "效果"):
+                    img_col = col_idx
+                elif h in ("类别", "分类", "业务形态", "形态"):
+                    cat_col = col_idx
+                elif h in ("品牌", "客户", "客户品牌"):
+                    brand_col = col_idx
+                elif h in ("文件路径", "路径", "工程路径", "目录"):
+                    path_col = col_idx
+                elif h in ("录入时间", "创建时间", "时间", "日期"):
+                    time_col = col_idx
+
+            # 兜底默认列
+            if not sku_col:
+                sku_col = 2
+            if not seq_col and sku_col > 1:
+                seq_col = 1
+            if not img_col:
+                img_col = 3
+            if not cat_col:
+                cat_col = 4
+            if not path_col:
+                path_col = 5
+            if not time_col:
+                time_col = 6
+
+            # 2. 建立 Excel 中已有 SKU 映射
+            existing_skus_map = {}
+            max_seq = 0
+            for r in range(2, sheet.max_row + 1):
+                c_val = str(sheet.cell(row=r, column=sku_col).value or "").strip()
+                if c_val:
+                    c_clean = re.sub(r'[\s_\-\(\)（）]+', '', c_val.lower())
+                    existing_skus_map[c_clean] = r
+                if seq_col:
+                    s_val = sheet.cell(row=r, column=seq_col).value
+                    try:
+                        seq_num = int(str(s_val).strip())
+                        if seq_num > max_seq:
+                            max_seq = seq_num
+                    except (ValueError, TypeError):
+                        pass
+
+            if max_seq == 0 and sheet.max_row > 1:
+                max_seq = sheet.max_row - 1
+
+            # 3. 设置图片列宽
+            img_col_letter = get_column_letter(img_col)
+            sheet.column_dimensions[img_col_letter].width = 14
+
+            temp_sync_dir = os.path.join(CACHE_DIR, "excel_fill_temp")
+            os.makedirs(temp_sync_dir, exist_ok=True)
+
+            auto_add_missing = self.options.get("auto_add_missing", True)
+            auto_insert_images = self.options.get("auto_insert_images", True)
+            auto_update_meta = self.options.get("auto_update_meta", True)
+
+            for idx, item in enumerate(self.projects, start=1):
+                if self.is_cancelled:
+                    wb.close()
+                    self.signals.finished.emit(False, {}, "已取消填充同步操作。")
+                    return
+
+                sku = item.get("sku", "")
+                brand = item.get("brand", "")
+                cat = item.get("cat") or item.get("category") or "包装"
+                proj_path = item.get("path", "")
+                thumb_path = item.get("thumbnail")
+
+                self.signals.progress.emit(idx, total, f"[{brand}] {sku}")
+
+                if not sku:
+                    continue
+
+                sku_clean = re.sub(r'[\s_\-\(\)（）]+', '', sku.lower())
+                target_row = existing_skus_map.get(sku_clean)
+
+                if not target_row:
+                    for c_clean, r_idx in existing_skus_map.items():
+                        if sku_clean and (sku_clean == c_clean or sku_clean in c_clean or c_clean in sku_clean):
+                            target_row = r_idx
+                            break
+
+                # 4. 如果 Excel 中缺失该项目
+                if not target_row:
+                    if not auto_add_missing:
+                        continue
+                    new_r = sheet.max_row + 1
+                    max_seq += 1
+                    if seq_col:
+                        sheet.cell(row=new_r, column=seq_col, value=max_seq)
+                    sheet.cell(row=new_r, column=sku_col, value=sku)
+                    if cat_col:
+                        sheet.cell(row=new_r, column=cat_col, value=cat)
+                    if brand_col:
+                        sheet.cell(row=new_r, column=brand_col, value=brand)
+                    if path_col:
+                        sheet.cell(row=new_r, column=path_col, value=proj_path.replace("\\", "/"))
+                    if time_col:
+                        sheet.cell(row=new_r, column=time_col, value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+                    
+                    existing_skus_map[sku_clean] = new_r
+                    target_row = new_r
+                    added_count += 1
+                else:
+                    # 已有项目，补齐缺失信息
+                    if auto_update_meta:
+                        if cat_col and not sheet.cell(row=target_row, column=cat_col).value:
+                            sheet.cell(row=target_row, column=cat_col, value=cat)
+                            updated_count += 1
+                        if path_col and not sheet.cell(row=target_row, column=path_col).value and proj_path:
+                            sheet.cell(row=target_row, column=path_col, value=proj_path.replace("\\", "/"))
+                        if brand_col and not sheet.cell(row=target_row, column=brand_col).value and brand:
+                            sheet.cell(row=target_row, column=brand_col, value=brand)
+
+                # 5. 插入缩略图效果图
+                if auto_insert_images and thumb_path and os.path.exists(thumb_path) and is_valid_beauty_thumbnail(thumb_path):
+                    try:
+                        safe_thumb_path = os.path.join(temp_sync_dir, f"fill_thumb_row_{target_row}.jpg")
+                        with PILImage.open(thumb_path) as im:
+                            im = im.convert("RGB")
+                            im.thumbnail((150, 150), PILImage.Resampling.LANCZOS)
+                            im.save(safe_thumb_path, "JPEG", quality=85)
+                            
+                        img = OpenpyxlImage(safe_thumb_path)
+                        img.width = 75
+                        img.height = 75
+                        sheet.row_dimensions[target_row].height = 65
+                        sheet.add_image(img, f"{img_col_letter}{target_row}")
+                        img_count += 1
+                    except Exception:
+                        pass
+
+            wb.save(self.excel_path)
+            wb.close()
+
+            stats = {
+                "total": total,
+                "added": added_count,
+                "images": img_count,
+                "updated": updated_count
+            }
+            self.signals.finished.emit(True, stats, "全量填充同步完成！")
+        except PermissionError:
+            self.signals.finished.emit(False, {}, "无法保存 Excel！请先关闭正在打开《产品列表.xlsx》的 WPS 或 Excel 程序后重试。")
+        except Exception as e:
+            self.signals.finished.emit(False, {}, f"同步发生异常: {str(e)}")
+
+# ----------------- 全量资产自动填充 Excel 对话框 -----------------
+class ExcelFillDialog(QDialog):
+    """全量资产自动填充与同步到 Excel 控制台对话框"""
+    def __init__(self, excel_path, all_projects, filtered_projects, parent=None):
+        super().__init__(parent)
+        self.excel_path = excel_path
+        self.all_projects = all_projects
+        self.filtered_projects = filtered_projects
+        self.setWindowTitle("📊 资产自动填充到 Excel 台账")
+        self.resize(580, 440)
+        self.setMinimumSize(520, 400)
+        self.build_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # 统计卡片
+        stat_box = QGroupBox("📊 资产与表格数据盘面")
+        stat_layout = QVBoxLayout(stat_box)
+        lbl_info = QLabel(
+            f"• <b>绑定表格</b>: {os.path.basename(self.excel_path)}<br>"
+            f"• <b>资产管理器扫描到的全量项目</b>: <span style='color:#38BDF8; font-weight:bold;'>{len(self.all_projects)}</span> 个<br>"
+            f"• <b>当前看板视图过滤项目</b>: <span style='color:#A78BFA; font-weight:bold;'>{len(self.filtered_projects)}</span> 个<br>"
+            f"<span style='color:#9BA1B0; font-size:12px;'>将自动对比磁盘资产与 Excel，智能补齐未录入的项目、分类及高清成片效果图。</span>"
+        )
+        lbl_info.setTextFormat(Qt.RichText)
+        stat_layout.addWidget(lbl_info)
+        layout.addWidget(stat_box)
+
+        # 同步范围
+        grp_scope = QGroupBox("🎯 同步范围")
+        scope_layout = QVBoxLayout(grp_scope)
+        self.radio_all = QRadioButton(f"全量资产项目 (全部工作盘与品牌共 {len(self.all_projects)} 个)")
+        self.radio_all.setChecked(True)
+        self.radio_filtered = QRadioButton(f"仅当前视图过滤项目 (当前品牌/形态分类共 {len(self.filtered_projects)} 个)")
+        scope_layout.addWidget(self.radio_all)
+        scope_layout.addWidget(self.radio_filtered)
+        layout.addWidget(grp_scope)
+
+        # 填充选项
+        grp_opts = QGroupBox("⚙️ 填充与写入选项")
+        opts_layout = QVBoxLayout(grp_opts)
+        self.chk_add_missing = QCheckBox("☑️ 自动在 Excel 末尾追加录入缺失的项目（序号、品名、分类、路径、时间）")
+        self.chk_add_missing.setChecked(True)
+        self.chk_insert_imgs = QCheckBox("☑️ 自动等比例缩放并嵌入成片效果图到【图片】单元格")
+        self.chk_insert_imgs.setChecked(True)
+        self.chk_update_meta = QCheckBox("☑️ 自动补充/更新已有项目的分类与物理路径")
+        self.chk_update_meta.setChecked(True)
+        opts_layout.addWidget(self.chk_add_missing)
+        opts_layout.addWidget(self.chk_insert_imgs)
+        opts_layout.addWidget(self.chk_update_meta)
+        layout.addWidget(grp_opts)
+
+        btn_box = QHBoxLayout()
+        btn_start = QPushButton("🚀 开始全自动填充同步")
+        btn_start.setObjectName("PrimaryBtn")
+        btn_start.setStyleSheet("background-color: #059669; color: white; font-weight: bold; font-size: 13px; padding: 10px 18px;")
+        btn_start.clicked.connect(self.accept)
+
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setStyleSheet("padding: 10px 18px;")
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_box.addStretch()
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_start)
+        layout.addLayout(btn_box)
+
+    def get_selected_projects(self):
+        if self.radio_filtered.isChecked():
+            return self.filtered_projects
+        return self.all_projects
+
+    def get_options(self):
+        return {
+            "auto_add_missing": self.chk_add_missing.isChecked(),
+            "auto_insert_images": self.chk_insert_imgs.isChecked(),
+            "auto_update_meta": self.chk_update_meta.isChecked()
+        }
+
 # ----------------- 自定义文件夹规则管理弹窗 -----------------
 class FolderRuleManagerDialog(QDialog):
     def __init__(self, rules, active_rule_id, parent=None):
@@ -2796,9 +3081,17 @@ class MainWindow(QMainWindow):
         self.sync_status_lbl = QLabel("🟢 极速同步已就绪")
         self.sync_status_lbl.setStyleSheet("background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
         
-        btn_sync_excel = QPushButton("📤 同步缩略图到 Excel")
+        btn_fill_excel = QPushButton("📊 自动填充资产到 Excel")
+        btn_fill_excel.setObjectName("PrimaryBtn")
+        btn_fill_excel.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
+        btn_fill_excel.setToolTip("对比磁盘资产与 Excel，将资产管理器中的全部项目、分类及成片效果图一键自动填充录入到 Excel")
+        btn_fill_excel.clicked.connect(self.open_excel_fill_dialog)
+
+        btn_sync_excel = QPushButton("📤 仅更新效果图")
+        btn_sync_excel.setToolTip("仅将成片缩略图写入 Excel 中已有的对应行")
         btn_sync_excel.clicked.connect(self.sync_all_thumbnails_to_excel)
-        btn_bind_excel = QPushButton("📊 绑定 Excel...")
+
+        btn_bind_excel = QPushButton("📁 绑定 Excel...")
         btn_bind_excel.clicked.connect(self.bind_excel_file)
         btn_refresh = QPushButton("🔄 刷新")
         btn_refresh.clicked.connect(self.async_load_data)
@@ -2812,6 +3105,7 @@ class MainWindow(QMainWindow):
 
         top_bar.addWidget(self.sync_status_lbl)
         top_bar.addStretch()
+        top_bar.addWidget(btn_fill_excel)
         top_bar.addWidget(btn_sync_excel)
         top_bar.addWidget(btn_bind_excel)
         top_bar.addWidget(btn_refresh)
@@ -3605,6 +3899,70 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "同步失败", msg)
                 
         worker.signals.finished.connect(on_finished)
+        progress.canceled.connect(worker.cancel)
+        self.thread_pool.start(worker)
+
+    def open_excel_fill_dialog(self):
+        """打开全量资产自动填充与同步到 Excel 控制台"""
+        ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
+        if not ex_path or not os.path.exists(ex_path):
+            QMessageBox.warning(self, "未找到 Excel", "未找到绑定的《产品列表.xlsx》台账文件！\n请先点击【📁 绑定 Excel...】进行绑定。")
+            return
+
+        dlg = ExcelFillDialog(ex_path, self.merged_projects, self.current_display_list, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        target_projs = dlg.get_selected_projects()
+        opts = dlg.get_options()
+        total = len(target_projs)
+        if total == 0:
+            QMessageBox.warning(self, "提示", "所选范围内没有找到任何资产项目！")
+            return
+
+        progress = QProgressDialog("正在准备全自动填充资产到 Excel...", "取消", 0, total, self)
+        progress.setWindowTitle("📊 资产全量填充 Excel")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        worker = ExcelFullFillWorker(ex_path, target_projs, opts)
+        worker.signals.progress.connect(lambda cur, tot, item_name: progress.setLabelText(f"正在填充同步 ({cur}/{tot}):\n{item_name}"))
+        worker.signals.progress.connect(lambda cur, tot, item_name: progress.setValue(cur))
+
+        def on_fill_finished(ok, stats, msg):
+            progress.close()
+            if ok:
+                added = stats.get("added", 0)
+                imgs = stats.get("images", 0)
+                upd = stats.get("updated", 0)
+                tot = stats.get("total", 0)
+                
+                info_text = (
+                    f"🎉 <b>资产全量填充与同步成功！</b><br><br>"
+                    f"• <b>处理资产总数</b>: {tot} 个<br>"
+                    f"• <b>新增录入到 Excel 项目</b>: <span style='color:#34D399; font-weight:bold;'>{added}</span> 个<br>"
+                    f"• <b>成功嵌入成片效果图</b>: <span style='color:#38BDF8; font-weight:bold;'>{imgs}</span> 张<br>"
+                    f"• <b>补齐分类/路径信息</b>: {upd} 个<br><br>"
+                    f"是否立即打开 Excel 表格查看？"
+                )
+                box = QMessageBox(self)
+                box.setWindowTitle("同步完成")
+                box.setText(info_text)
+                box.setTextFormat(Qt.RichText)
+                btn_open_excel = box.addButton("📂 打开 Excel 查看", QMessageBox.AcceptRole)
+                box.addButton("关闭", QMessageBox.RejectRole)
+                box.exec()
+                if box.clickedButton() == btn_open_excel:
+                    try:
+                        os.startfile(ex_path)
+                    except Exception:
+                        pass
+                self.async_load_data()
+            else:
+                QMessageBox.warning(self, "填充失败", msg)
+
+        worker.signals.finished.connect(on_fill_finished)
         progress.canceled.connect(worker.cancel)
         self.thread_pool.start(worker)
 
