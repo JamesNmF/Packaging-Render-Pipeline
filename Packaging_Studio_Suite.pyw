@@ -79,7 +79,7 @@ from PySide6.QtWidgets import (
     QListView, QStyledItemDelegate, QStyle, QMenu, QFileDialog, QInputDialog,
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
-    QProgressBar, QSplashScreen, QToolButton, QProgressDialog
+    QProgressBar, QSplashScreen, QToolButton, QProgressDialog, QSystemTrayIcon
 )
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".packaging_suite_v7.json")
@@ -2551,6 +2551,63 @@ class ManualProjectCreateDialog(QDialog):
         QMessageBox.information(self, "创建成功", f"🎉 项目 【{brand} / {sku}】 已成功创建并初始化完成！")
         self.accept()
 
+# ----------------- 关闭窗口行为确认弹窗 -----------------
+class CloseActionDialog(QDialog):
+    """
+    关闭窗口确认对话框：
+    支持选择最小化到系统托盘（后台热驻留）或彻底退出，并可记住选择
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("⚙️ 关闭窗口选项")
+        self.setFixedSize(390, 210)
+        self.selected_action = "tray"
+        self.remember = False
+        self.build_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        lbl = QLabel("<b>您希望如何处理当前窗口？</b><br><span style='color:#9BA1B0; font-size:12px;'>最小化到系统托盘可保留后台热驻留，再次打开 0 毫秒瞬开，减少重复等待时间。</span>")
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        self.chk_remember = QCheckBox("记住我的选择，下次关闭直接执行")
+        self.chk_remember.setStyleSheet("color: #CBD5E1; font-size: 12px;")
+        layout.addWidget(self.chk_remember)
+
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(12)
+        
+        btn_tray = QPushButton("📥 最小化到托盘 (推荐)")
+        btn_tray.setObjectName("PrimaryBtn")
+        btn_tray.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 12px; padding: 8px 14px;")
+        btn_tray.clicked.connect(self.choose_tray)
+
+        btn_quit = QPushButton("❌ 彻底退出程序")
+        btn_quit.setStyleSheet("padding: 8px 14px; font-size: 12px;")
+        btn_quit.clicked.connect(self.choose_quit)
+
+        btn_box.addWidget(btn_tray)
+        btn_box.addWidget(btn_quit)
+        layout.addLayout(btn_box)
+
+    def choose_tray(self):
+        self.selected_action = "tray"
+        self.remember = self.chk_remember.isChecked()
+        self.accept()
+
+    def choose_quit(self):
+        self.selected_action = "quit"
+        self.remember = self.chk_remember.isChecked()
+        self.accept()
+
 # ----------------- Qt6 工业级主窗口 -----------------
 class MainWindow(QMainWindow):
     initial_load_done = Signal()
@@ -2586,8 +2643,10 @@ class MainWindow(QMainWindow):
         
         self.files_to_organize = []
         self.has_fired_initial_done = False
+        self.is_force_quitting = False
         
         self.setup_ui()
+        self.init_tray_icon()
         self.apply_theme()
         self.update_workspace_filter_combo()
         self.update_organizer_ws_combo()
@@ -2627,6 +2686,99 @@ class MainWindow(QMainWindow):
         self.apply_theme()
         self.gallery_view.viewport().update()
 
+    # ---------------- 系统托盘与关闭行为管理 ----------------
+    def init_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        icon = QIcon(APP_ICON_PNG) if os.path.exists(APP_ICON_PNG) else QIcon(APP_ICON_ICO)
+        self.tray_icon.setIcon(icon)
+        self.tray_icon.setToolTip("美术资产中枢 (Art Asset Hub) - 点击瞬时唤醒")
+
+        tray_menu = QMenu()
+        act_show = tray_menu.addAction("🖼️ 显示主窗口")
+        act_show.triggered.connect(self.show_main_window)
+        
+        act_refresh = tray_menu.addAction("🔄 刷新资产")
+        act_refresh.triggered.connect(self.async_load_data)
+        
+        tray_menu.addSeparator()
+        
+        act_settings = tray_menu.addAction("⚙️ 关闭行为设置...")
+        act_settings.triggered.connect(self.configure_close_action)
+        
+        tray_menu.addSeparator()
+        
+        act_quit = tray_menu.addAction("❌ 彻底退出程序")
+        act_quit.triggered.connect(self.force_quit_app)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+        self.tray_icon.show()
+
+    def on_tray_icon_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.show_main_window()
+
+    def show_main_window(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def force_quit_app(self):
+        self.is_force_quitting = True
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.hide()
+        QApplication.quit()
+
+    def configure_close_action(self):
+        dlg = CloseActionDialog(self)
+        dlg.chk_remember.setChecked(self.cfg.get("remember_close_action", False))
+        if dlg.exec() == QDialog.Accepted:
+            self.cfg["close_action"] = dlg.selected_action
+            self.cfg["remember_close_action"] = dlg.remember
+            save_config(self.cfg)
+            act_text = "📥 最小化到系统托盘 (后台热驻留)" if dlg.selected_action == "tray" else "❌ 彻底退出程序"
+            rem_text = "（已开启记住选择）" if dlg.remember else "（下次关闭仍会询问）"
+            QMessageBox.information(self, "设置已保存", f"已成功将关闭窗口默认行为设置为：\n【{act_text}】\n{rem_text}")
+
+    def closeEvent(self, event):
+        if getattr(self, "is_force_quitting", False):
+            event.accept()
+            return
+
+        remember = self.cfg.get("remember_close_action", False)
+        action = self.cfg.get("close_action", "")
+
+        if not remember or action not in ("tray", "quit"):
+            dlg = CloseActionDialog(self)
+            if dlg.exec() != QDialog.Accepted:
+                event.ignore()
+                return
+            action = dlg.selected_action
+            if dlg.remember:
+                self.cfg["close_action"] = action
+                self.cfg["remember_close_action"] = True
+                save_config(self.cfg)
+            else:
+                self.cfg["remember_close_action"] = False
+                save_config(self.cfg)
+
+        if action == "tray":
+            event.ignore()
+            self.hide()
+            if not self.cfg.get("has_shown_tray_bubble", False):
+                self.cfg["has_shown_tray_bubble"] = True
+                save_config(self.cfg)
+                if hasattr(self, "tray_icon") and self.tray_icon.isVisible():
+                    self.tray_icon.showMessage(
+                        "美术资产中枢已在后台运行",
+                        "程序已最小化到系统托盘。点击托盘图标可随时 0 毫秒瞬间唤醒！",
+                        QSystemTrayIcon.Information,
+                        3000
+                    )
+        else:
+            self.force_quit_app()
+            event.accept()
+
     def setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -2649,6 +2801,9 @@ class MainWindow(QMainWindow):
         btn_export.clicked.connect(self.export_html_gallery)
         self.btn_theme = QPushButton("🌙 护眼暗灰")
         self.btn_theme.clicked.connect(self.toggle_theme)
+        btn_settings = QPushButton("⚙️ 设置")
+        btn_settings.setToolTip("设置关闭窗口时的默认行为（最小化到托盘/彻底退出）")
+        btn_settings.clicked.connect(self.configure_close_action)
 
         top_bar.addWidget(self.sync_status_lbl)
         top_bar.addStretch()
@@ -2657,6 +2812,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(btn_refresh)
         top_bar.addWidget(btn_export)
         top_bar.addWidget(self.btn_theme)
+        top_bar.addWidget(btn_settings)
         main_layout.addLayout(top_bar)
 
         # 主 Tab
