@@ -51,10 +51,10 @@ class PackagingPipelineProperties(PropertyGroup):
         name="输出格式",
         description="选择渲染图片输出格式",
         items=[
-            ('PNG', "PNG (无损透明)", "保存为无损 RGBA PNG 格式"),
             ('JPEG', "JPG (100% 极高清)", "保存为 100% 最高画质 JPG 格式 (Quality: 100)，体积缩减 85%"),
+            ('PNG', "PNG (无损透明)", "保存为无损 RGBA PNG 格式"),
         ],
-        default='PNG'
+        default='JPEG'
     )
     output_directory: StringProperty(
         name="保存目录",
@@ -73,23 +73,66 @@ class PackagingPipelineProperties(PropertyGroup):
         default=True
     )
     export_beauty: BoolProperty(name="成品图 (Beauty)", default=True)
-    export_alpha: BoolProperty(name="纯黑白剪切蒙版 (Alpha)", default=True)
+    export_alpha: BoolProperty(name="纯黑剪切蒙版 (Alpha)", default=True)
     export_cryptomatte: BoolProperty(name="Cryptomatte 智能选区", default=True)
     auto_open_folder: BoolProperty(name="渲染完成后自动弹出文件夹", default=True)
 
 
+RENDER_SUBFOLDER_CANDIDATES = [
+    "04_Renders_通道输出",
+    "04_Renders_高清分层输出",
+    "04_Renders",
+    "03_输出",
+    "05_Delivery_最终交付",
+    "渲染",
+    "Renders",
+    "Output"
+]
+
 def get_resolved_output_directory(scene):
-    """安全解析保存目录，兼容未保存的工程与相对路径"""
+    """
+    智能解析保存目录：
+    1. 若用户在面板手动指定了绝对路径，优先使用；
+    2. 若为默认 // 或空，自动向上探测父级是否存在「04_Renders_通道输出」或「渲染」；
+    3. 若工程位于「03_3D_三维工程」等子目录，自动回退到父级并归入「04_Renders_通道输出」；
+    4. 绝不会错误保存在 03 建模工程目录中！
+    """
     raw_dir = scene.packaging_props.output_directory.strip()
     
     if bpy.data.filepath:
-        blend_dir = os.path.dirname(bpy.data.filepath)
-        if not raw_dir or raw_dir == "//":
-            return blend_dir
-        abs_dir = bpy.path.abspath(raw_dir)
-        return abs_dir if abs_dir else blend_dir
+        if raw_dir and raw_dir not in ("//", ".", ".\\", "./"):
+            abs_dir = bpy.path.abspath(raw_dir)
+            if abs_dir:
+                return abs_dir
+                
+        blend_dir = os.path.dirname(os.path.abspath(bpy.data.filepath))
+        parent_dir = os.path.dirname(blend_dir)
+        
+        # 1. 优先扫描父级目录是否已有标准渲染输出文件夹
+        for c in RENDER_SUBFOLDER_CANDIDATES:
+            cand_p = os.path.join(parent_dir, c)
+            if os.path.exists(cand_p) and os.path.isdir(cand_p):
+                return cand_p
+                
+        # 2. 扫描同级目录是否已有渲染输出文件夹
+        for c in RENDER_SUBFOLDER_CANDIDATES:
+            cand_p = os.path.join(blend_dir, c)
+            if os.path.exists(cand_p) and os.path.isdir(cand_p):
+                return cand_p
+
+        # 3. 检查当前目录是否是工程子目录 (如 03_3D_三维工程, 03_3D, 02_工程, 模型, 3D)
+        blend_dir_name = os.path.basename(blend_dir).lower()
+        if any(k in blend_dir_name for k in ["03_3d", "3d", "三维", "工程", "模型", "02_工程", "blend"]):
+            target_dir = os.path.join(parent_dir, "04_Renders_通道输出")
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+            except Exception:
+                pass
+            return target_dir
+            
+        return blend_dir
     else:
-        if raw_dir and raw_dir != "//":
+        if raw_dir and raw_dir not in ("//", ".", ".\\", "./"):
             abs_dir = bpy.path.abspath(raw_dir)
             if abs_dir:
                 return abs_dir
@@ -263,18 +306,44 @@ def setup_compositor_and_passes(context, props, effective_prefix):
 
     final_beauty_socket = find_final_beauty_socket(tree, rl_node)
 
+    # 智能查找或自动创建 Cryptomatte 节点并连线 (Render Layers [图像] -> Cryptomatte [图像], Cryptomatte [选取/Pick] -> File Output)
     crypto_socket = None
-    for n in tree.nodes:
-        if 'crypto' in n.type.lower() or 'crypto' in n.name.lower():
-            if 'Pick' in n.outputs:
-                crypto_socket = n.outputs['Pick']
-            elif 'Matte' in n.outputs:
-                crypto_socket = n.outputs['Matte']
-            elif 'Image' in n.outputs:
-                crypto_socket = n.outputs['Image']
-            break
-    if not crypto_socket and 'CryptoObject00' in rl_node.outputs:
-        crypto_socket = rl_node.outputs['CryptoObject00']
+    if props.export_cryptomatte:
+        crypto_node = None
+        for n in tree.nodes:
+            if n.type in ('CRYPTOMATTE', 'CRYPTOMATTE_V2') or ('crypto' in n.name.lower() and n.type != 'OUTPUT_FILE' and 'packaging' not in n.name.lower()):
+                crypto_node = n
+                break
+                
+        if not crypto_node:
+            try:
+                crypto_node = tree.nodes.new(type='CompositorNodeCryptomatteV2')
+            except Exception:
+                try:
+                    crypto_node = tree.nodes.new(type='CompositorNodeCryptomatte')
+                except Exception:
+                    crypto_node = None
+                    
+        if crypto_node:
+            crypto_node.location = (rl_node.location.x + 350, rl_node.location.y - 250)
+            if hasattr(crypto_node, "source"):
+                crypto_node.source = 'RENDER'
+            if hasattr(crypto_node, "layer_name"):
+                crypto_node.layer_name = 'ViewLayer.CryptoObject'
+                
+            # 严格连接：Render Layers [图像/Image] -> Cryptomatte [图像/Image]
+            if 'Image' in rl_node.outputs and 'Image' in crypto_node.inputs:
+                tree.links.new(rl_node.outputs['Image'], crypto_node.inputs['Image'])
+                
+            # 取出 Cryptomatte 的【选取 / Pick】彩色彩图输出（供 PS 魔棒一键抠图选区）
+            if 'Pick' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Pick']
+            elif '选取' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['选取']
+            elif 'Matte' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Matte']
+            elif 'Image' in crypto_node.outputs:
+                crypto_socket = crypto_node.outputs['Image']
 
     # 兼容 Blender 5.2 file_output_items (使用物理索引进行安全连线)
     if hasattr(fo_node, "file_output_items"):
@@ -379,6 +448,17 @@ def on_render_complete_batch_dispatcher(scene):
             except Exception:
                 pass
             target_open_dir = ""
+
+@persistent
+def on_render_cancel_handler(scene):
+    global is_in_batch, camera_render_queue, original_scene_camera, target_open_dir
+    is_in_batch = False
+    camera_render_queue.clear()
+    if original_scene_camera and scene:
+        scene.camera = original_scene_camera
+        original_scene_camera = None
+    target_open_dir = ""
+    print("⚠️ 批量连拍已由用户手动中断 (Cancel)，已成功复原场景机位。")
 
 
 # ==============================================================================
@@ -693,18 +773,6 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         scene = context.scene
         props = scene.packaging_props
         
-        # 模块 0：标准项目脚手架创建
-        box_scaffold = layout.box()
-        box_scaffold.label(text="📁 新建工业级标准项目 (脚手架)", icon='NEWFOLDER')
-        box_scaffold.prop(props, "scaffold_root_dir", text="工作盘/根目录")
-        row_names = box_scaffold.row(align=True)
-        row_names.prop(props, "scaffold_client_name", text="客户/品牌")
-        row_names.prop(props, "scaffold_project_name", text="产品/SKU")
-        
-        row_btn_sc = box_scaffold.row()
-        row_btn_sc.scale_y = 1.3
-        row_btn_sc.operator("project.create_scaffold", text="✨ 一键创建标准工程并自动另存", icon='FILE_TICK')
-        
         # 模块 1：画幅与渲染品质快选
         box_quick = layout.box()
         box_quick.label(text="📐 画幅比例与品质快切", icon='IMAGE_PLANE')
@@ -772,6 +840,9 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         row_fmt.prop(props, "image_format", expand=True)
         
         box_out.prop(props, "output_directory", text="保存目录")
+        resolved_out = get_resolved_output_directory(scene)
+        if resolved_out:
+            box_out.label(text=f"📂 目标目录: {os.path.basename(resolved_out)}", icon='FILE_FOLDER')
         
         detected_name = auto_detect_project_name(scene)
         box_out.prop(props, "sku_name", text="自定义前缀", placeholder=f"自动识别: {detected_name}")
@@ -825,12 +896,18 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.packaging_props = PointerProperty(type=PackagingPipelineProperties)
+    if on_render_complete_batch_dispatcher not in bpy.app.handlers.render_complete:
+        bpy.app.handlers.render_complete.append(on_render_complete_batch_dispatcher)
+    if on_render_cancel_handler not in bpy.app.handlers.render_cancel:
+        bpy.app.handlers.render_cancel.append(on_render_cancel_handler)
 
 def unregister():
     if hasattr(bpy.types.Object, "use_for_batch_render"):
         del bpy.types.Object.use_for_batch_render
     if on_render_complete_batch_dispatcher in bpy.app.handlers.render_complete:
         bpy.app.handlers.render_complete.remove(on_render_complete_batch_dispatcher)
+    if on_render_cancel_handler in bpy.app.handlers.render_cancel:
+        bpy.app.handlers.render_cancel.remove(on_render_cancel_handler)
     if hasattr(bpy.types.Scene, "packaging_props"):
         del bpy.types.Scene.packaging_props
     for cls in reversed(classes):

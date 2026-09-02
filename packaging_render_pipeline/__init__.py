@@ -51,10 +51,10 @@ class PackagingPipelineProperties(PropertyGroup):
         name="输出格式",
         description="选择渲染图片输出格式",
         items=[
-            ('PNG', "PNG (无损透明)", "保存为无损 RGBA PNG 格式"),
             ('JPEG', "JPG (100% 极高清)", "保存为 100% 最高画质 JPG 格式 (Quality: 100)，体积缩减 85%"),
+            ('PNG', "PNG (无损透明)", "保存为无损 RGBA PNG 格式"),
         ],
-        default='PNG'
+        default='JPEG'
     )
     output_directory: StringProperty(
         name="保存目录",
@@ -73,7 +73,7 @@ class PackagingPipelineProperties(PropertyGroup):
         default=True
     )
     export_beauty: BoolProperty(name="成品图 (Beauty)", default=True)
-    export_alpha: BoolProperty(name="纯黑白剪切蒙版 (Alpha)", default=True)
+    export_alpha: BoolProperty(name="纯黑剪切蒙版 (Alpha)", default=True)
     export_cryptomatte: BoolProperty(name="Cryptomatte 智能选区", default=True)
     auto_open_folder: BoolProperty(name="渲染完成后自动弹出文件夹", default=True)
 
@@ -772,18 +772,6 @@ class VIEW3D_PT_packaging_pipeline(Panel):
         layout = self.layout
         scene = context.scene
         props = scene.packaging_props
-        
-        # 模块 0：标准项目脚手架创建
-        box_scaffold = layout.box()
-        box_scaffold.label(text="📁 新建工业级标准项目 (脚手架)", icon='NEWFOLDER')
-        box_scaffold.prop(props, "scaffold_root_dir", text="工作盘/根目录")
-        row_names = box_scaffold.row(align=True)
-        row_names.prop(props, "scaffold_client_name", text="客户/品牌")
-        row_names.prop(props, "scaffold_project_name", text="产品/SKU")
-        
-        row_btn_sc = box_scaffold.row()
-        row_btn_sc.scale_y = 1.3
-        row_btn_sc.operator("project.create_scaffold", text="✨ 一键创建标准工程并自动另存", icon='FILE_TICK')
         
         # 模块 1：画幅与渲染品质快选
         box_quick = layout.box()
