@@ -2177,6 +2177,543 @@ class ExcelFillDialog(QDialog):
             "auto_update_meta": self.chk_update_meta.isChecked()
         }
 
+# ----------------- 自动化工作汇报 (周报) 生成引擎与对话框 -----------------
+def get_natural_week_bounds(offset_weeks=0):
+    """计算自然周 (周一 00:00:00 至 周日 23:59:59)"""
+    now = datetime.datetime.now()
+    target_day = now + datetime.timedelta(weeks=offset_weeks)
+    monday = target_day - datetime.timedelta(days=target_day.weekday())
+    monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    sunday = monday + datetime.timedelta(days=6, hours=23, minutes=59, seconds=59)
+    return monday, sunday
+
+def scan_weekly_report_items(workspaces_v2, start_dt, end_dt):
+    """扫描指定自然周区间内所有工作盘的新增项目、工程修改与渲染出图"""
+    start_ts = start_dt.timestamp()
+    end_ts = end_dt.timestamp()
+    projects_map = {}
+    
+    for ws in workspaces_v2:
+        ws_path = ws.get("path", "")
+        if not ws_path or not os.path.exists(ws_path):
+            continue
+        try:
+            brand_entries = os.listdir(ws_path)
+        except Exception:
+            continue
+            
+        for brand_name in brand_entries:
+            brand_dir = os.path.join(ws_path, brand_name)
+            if not os.path.isdir(brand_dir) or brand_name.lower() in [".git", "$recycle.bin", "system volume information"]:
+                continue
+            try:
+                sku_entries = os.listdir(brand_dir)
+            except Exception:
+                continue
+                
+            for sku_name in sku_entries:
+                sku_dir = os.path.join(brand_dir, sku_name)
+                if not os.path.isdir(sku_dir):
+                    continue
+                
+                latest_mtime = 0
+                render_count = 0
+                has_change = False
+                
+                # 检查自身 ctime / mtime
+                try:
+                    st = os.stat(sku_dir)
+                    if start_ts <= st.st_mtime <= end_ts or start_ts <= st.st_ctime <= end_ts:
+                        has_change = True
+                        latest_mtime = max(latest_mtime, st.st_mtime)
+                except Exception:
+                    pass
+                
+                # 遍历内部关键文件
+                for root, dirs, files in os.walk(sku_dir):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        try:
+                            f_st = os.stat(fp)
+                            if start_ts <= f_st.st_mtime <= end_ts:
+                                has_change = True
+                                latest_mtime = max(latest_mtime, f_st.st_mtime)
+                                f_lower = f.lower()
+                                if f_lower.endswith(('.png', '.jpg', '.jpeg')) and is_valid_beauty_thumbnail(f):
+                                    rel_root = os.path.relpath(root, sku_dir).lower()
+                                    if any(k in rel_root for k in ['render', '渲染', 'delivery', '交付', 'output', '输出']):
+                                        render_count += 1
+                        except Exception:
+                            pass
+                            
+                if has_change:
+                    clean_sku = sku_name.strip()
+                    brand = brand_name.strip()
+                    if brand and clean_sku.startswith(brand):
+                        clean_sku = clean_sku[len(brand):].lstrip("-_ ")
+                        
+                    # 按照用户实际周报格式精炼命名
+                    if "海报" in clean_sku:
+                        work_content = f"{brand}{clean_sku}"
+                    elif "套盒" in clean_sku or "礼盒" in clean_sku or "展架" in clean_sku:
+                        work_content = f"{brand}{clean_sku}效果图" if not clean_sku.endswith("效果图") else f"{brand}{clean_sku}"
+                    elif clean_sku.endswith("效果图"):
+                        work_content = f"{brand}{clean_sku}"
+                    else:
+                        work_content = f"{brand}{clean_sku}效果图"
+                        
+                    if render_count > 1:
+                        work_content += f"*{render_count}"
+                        
+                    dt = datetime.datetime.fromtimestamp(latest_mtime) if latest_mtime > 0 else start_dt
+                    plan_date = f"{dt.year}/{dt.month}/{dt.day}"
+                    
+                    projects_map[sku_dir] = {
+                        "selected": True,
+                        "brand": brand,
+                        "sku": sku_name,
+                        "content": work_content,
+                        "urgency": "一般",
+                        "plan_date": plan_date,
+                        "progress": "100%",
+                        "remark": "",
+                        "latest_mtime": latest_mtime,
+                        "render_count": render_count,
+                        "path": sku_dir
+                    }
+                    
+    items = list(projects_map.values())
+    items.sort(key=lambda x: x.get("latest_mtime", 0), reverse=True)
+    return items
+
+class WeeklyReportDialog(QDialog):
+    """自动化工作汇报 (周报) 生成与导出对话框"""
+    def __init__(self, workspaces_v2, parent=None):
+        super().__init__(parent)
+        self.workspaces_v2 = workspaces_v2
+        self.week_offset = 0  # 0: 本周, -1: 上周, 1: 下周
+        self.items = []
+        
+        self.setWindowTitle("工作汇报 (周报)")
+        self.resize(920, 620)
+        self.setMinimumSize(800, 500)
+        self.build_ui()
+        self.load_week_data()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        # 顶部自然周切换控制栏
+        top_ctrl = QHBoxLayout()
+        self.btn_prev = QPushButton("◀ 上一周")
+        self.btn_prev.clicked.connect(self.go_prev_week)
+        
+        self.lbl_week = QLabel()
+        self.lbl_week.setStyleSheet("font-size: 14px; font-weight: bold; color: #38BDF8; padding: 0 8px;")
+        
+        self.btn_next = QPushButton("下一周 ▶")
+        self.btn_next.clicked.connect(self.go_next_week)
+        
+        self.btn_this_week = QPushButton("本周")
+        self.btn_this_week.clicked.connect(self.go_this_week)
+
+        self.lbl_summary = QLabel()
+        self.lbl_summary.setStyleSheet("color: #9BA1B0; font-size: 12px; margin-left: 12px;")
+
+        top_ctrl.addWidget(self.btn_prev)
+        top_ctrl.addWidget(self.lbl_week)
+        top_ctrl.addWidget(self.btn_next)
+        top_ctrl.addWidget(self.btn_this_week)
+        top_ctrl.addWidget(self.lbl_summary)
+        top_ctrl.addStretch()
+        layout.addLayout(top_ctrl)
+
+        # 数据表格
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["包含", "序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"])
+        
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Interactive)
+        self.table.setColumnWidth(6, 120)
+        
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #333842;
+                background-color: #1E2024;
+                color: #E2E8F0;
+                font-size: 12px;
+            }
+            QHeaderView::section {
+                background-color: #282A30;
+                color: #CBD5E1;
+                font-weight: bold;
+                padding: 6px;
+                border: 1px solid #333842;
+            }
+        """)
+        self.table.itemChanged.connect(self.on_table_item_changed)
+        layout.addWidget(self.table)
+
+        # 底部操作按钮栏
+        bottom_bar = QHBoxLayout()
+        
+        btn_add = QPushButton("➕ 添加一行")
+        btn_add.clicked.connect(self.add_manual_row)
+        
+        btn_del = QPushButton("🗑️ 移除选中行")
+        btn_del.clicked.connect(self.delete_selected_row)
+        
+        btn_copy = QPushButton("📋 复制表格数据")
+        btn_copy.setObjectName("PrimaryBtn")
+        btn_copy.setToolTip("复制为 TSV 数据，在 Excel 中直接 Ctrl+V 即可粘贴整齐表格")
+        btn_copy.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 8px 16px;")
+        btn_copy.clicked.connect(self.copy_tsv_to_clipboard)
+
+        btn_export = QPushButton("📊 导出为工作汇报.xlsx")
+        btn_export.setObjectName("PrimaryBtn")
+        btn_export.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 8px 16px;")
+        btn_export.clicked.connect(self.export_to_excel)
+
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(self.reject)
+
+        bottom_bar.addWidget(btn_add)
+        bottom_bar.addWidget(btn_del)
+        bottom_bar.addStretch()
+        bottom_bar.addWidget(btn_copy)
+        bottom_bar.addWidget(btn_export)
+        bottom_bar.addWidget(btn_close)
+        layout.addLayout(bottom_bar)
+
+    def load_week_data(self):
+        start_dt, end_dt = get_natural_week_bounds(self.week_offset)
+        
+        tag = " (本周)" if self.week_offset == 0 else (f" (上{abs(self.week_offset)}周)" if self.week_offset < 0 else f" (下{self.week_offset}周)")
+        self.lbl_week.setText(f"{start_dt.strftime('%Y/%m/%d')} ~ {end_dt.strftime('%Y/%m/%d')}{tag}")
+        
+        self.items = scan_weekly_report_items(self.workspaces_v2, start_dt, end_dt)
+        self.lbl_summary.setText(f"检测到 {len(self.items)} 项工作变动")
+        self.populate_table()
+
+    def go_prev_week(self):
+        self.week_offset -= 1
+        self.load_week_data()
+
+    def go_next_week(self):
+        self.week_offset += 1
+        self.load_week_data()
+
+    def go_this_week(self):
+        self.week_offset = 0
+        self.load_week_data()
+
+    def populate_table(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.items))
+        
+        seq_num = 1
+        for row, item in enumerate(self.items):
+            is_sel = item.get("selected", True)
+            
+            # 0. 勾选框
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            chk_item.setCheckState(Qt.Checked if is_sel else Qt.Unchecked)
+            chk_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 0, chk_item)
+            
+            # 1. 序号
+            seq_text = str(seq_num) if is_sel else "-"
+            seq_item = QTableWidgetItem(seq_text)
+            seq_item.setTextAlignment(Qt.AlignCenter)
+            seq_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, 1, seq_item)
+            if is_sel:
+                seq_num += 1
+                
+            # 2. 工作内容
+            content_item = QTableWidgetItem(item.get("content", ""))
+            content_item.setForeground(QColor("#FFFFFF" if is_sel else "#6B7280"))
+            self.table.setItem(row, 2, content_item)
+            
+            # 3. 紧急程度
+            urgency_item = QTableWidgetItem(item.get("urgency", "一般"))
+            urgency_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 3, urgency_item)
+            
+            # 4. 计划完成时间
+            date_item = QTableWidgetItem(item.get("plan_date", ""))
+            date_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 4, date_item)
+            
+            # 5. 完成进度 (浅绿底色)
+            prog_item = QTableWidgetItem(item.get("progress", "100%"))
+            prog_item.setTextAlignment(Qt.AlignCenter)
+            if is_sel:
+                prog_item.setBackground(QColor("#065F46"))  # 深暗绿背景在暗色主题下舒适
+                prog_item.setForeground(QColor("#6EE7B7"))
+            self.table.setItem(row, 5, prog_item)
+            
+            # 6. 备注
+            remark_item = QTableWidgetItem(item.get("remark", ""))
+            self.table.setItem(row, 6, remark_item)
+            
+        self.table.blockSignals(False)
+
+    def on_table_item_changed(self, item):
+        row = item.row()
+        col = item.column()
+        if row >= len(self.items):
+            return
+            
+        if col == 0:
+            is_checked = (item.checkState() == Qt.Checked)
+            self.items[row]["selected"] = is_checked
+            self.refresh_sequence_numbers()
+        elif col == 2:
+            self.items[row]["content"] = item.text().strip()
+        elif col == 3:
+            self.items[row]["urgency"] = item.text().strip()
+        elif col == 4:
+            self.items[row]["plan_date"] = item.text().strip()
+        elif col == 5:
+            self.items[row]["progress"] = item.text().strip()
+        elif col == 6:
+            self.items[row]["remark"] = item.text().strip()
+
+    def refresh_sequence_numbers(self):
+        self.table.blockSignals(True)
+        seq_num = 1
+        for row, it in enumerate(self.items):
+            is_sel = it.get("selected", True)
+            seq_item = self.table.item(row, 1)
+            content_item = self.table.item(row, 2)
+            prog_item = self.table.item(row, 5)
+            
+            if seq_item:
+                seq_item.setText(str(seq_num) if is_sel else "-")
+            if content_item:
+                content_item.setForeground(QColor("#FFFFFF" if is_sel else "#6B7280"))
+            if prog_item:
+                if is_sel:
+                    prog_item.setBackground(QColor("#065F46"))
+                    prog_item.setForeground(QColor("#6EE7B7"))
+                else:
+                    prog_item.setBackground(QColor("#1E2024"))
+                    prog_item.setForeground(QColor("#6B7280"))
+                    
+            if is_sel:
+                seq_num += 1
+        self.table.blockSignals(False)
+
+    def add_manual_row(self):
+        today = datetime.datetime.now()
+        date_str = f"{today.year}/{today.month}/{today.day}"
+        new_it = {
+            "selected": True,
+            "brand": "",
+            "sku": "",
+            "content": "新工作项（双击修改）",
+            "urgency": "一般",
+            "plan_date": date_str,
+            "progress": "100%",
+            "remark": "",
+            "latest_mtime": today.timestamp(),
+            "render_count": 0,
+            "path": ""
+        }
+        self.items.append(new_it)
+        self.populate_table()
+        self.table.scrollToBottom()
+
+    def delete_selected_row(self):
+        cur_row = self.table.currentRow()
+        if 0 <= cur_row < len(self.items):
+            del self.items[cur_row]
+            self.populate_table()
+
+    def get_active_items(self):
+        active = []
+        seq = 1
+        for it in self.items:
+            if it.get("selected", True):
+                active.append({
+                    "seq": seq,
+                    "content": it.get("content", ""),
+                    "urgency": it.get("urgency", "一般"),
+                    "plan_date": it.get("plan_date", ""),
+                    "progress": it.get("progress", "100%"),
+                    "remark": it.get("remark", "")
+                })
+                seq += 1
+        return active
+
+    def copy_tsv_to_clipboard(self):
+        active = self.get_active_items()
+        if not active:
+            QMessageBox.warning(self, "提示", "当前没有勾选任何工作项！")
+            return
+            
+        lines = ["序号\t工作内容\t紧急程度\t计划完成时间\t完成进度\t备注"]
+        for it in active:
+            lines.append(f"{it['seq']}\t{it['content']}\t{it['urgency']}\t{it['plan_date']}\t{it['progress']}\t{it['remark']}")
+            
+        tsv_text = "\n".join(lines)
+        QApplication.clipboard().setText(tsv_text)
+        QMessageBox.information(self, "复制成功", f"已复制 {len(active)} 条工作汇报数据到剪贴板！\n直接在 Excel 中按 Ctrl+V 即可粘贴整齐表格。")
+
+    def export_to_excel(self):
+        active = self.get_active_items()
+        if not active:
+            QMessageBox.warning(self, "提示", "当前没有勾选任何工作项！")
+            return
+            
+        start_dt, end_dt = get_natural_week_bounds(self.week_offset)
+        default_name = f"工作汇报_{start_dt.strftime('%Y%m%d')}_{end_dt.strftime('%Y%m%d')}.xlsx"
+        
+        save_path, _ = QFileDialog.getSaveFileName(self, "导出工作汇报 Excel", default_name, "Excel Files (*.xlsx)")
+        if not save_path:
+            return
+            
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "工作汇报"
+            ws.views.sheetView[0].showGridLines = True
+            
+            # 边框样式
+            thin_border = Border(
+                left=Side(style="thin", color="D1D5DB"),
+                right=Side(style="thin", color="D1D5DB"),
+                top=Side(style="thin", color="D1D5DB"),
+                bottom=Side(style="thin", color="D1D5DB")
+            )
+            
+            # 1. 标题行 A1:F1
+            ws.merge_cells("A1:F1")
+            cell_title = ws["A1"]
+            cell_title.value = "工 作 汇 报"
+            cell_title.font = Font(name="Microsoft YaHei", size=16, bold=True)
+            cell_title.alignment = Alignment(horizontal="center", vertical="center")
+            ws.row_dimensions[1].height = 42
+            
+            for col in range(1, 7):
+                ws.cell(row=1, column=col).border = thin_border
+                
+            # 2. 汇报信息行
+            today = datetime.datetime.now()
+            today_str = f"{today.year}/{today.month}/{today.day}"
+            
+            ws["A2"] = "汇报人："
+            ws["B2"] = "部门："
+            ws["C2"] = "职务："
+            ws["D2"] = f"汇报日期：{today_str}"
+            ws.row_dimensions[2].height = 24
+            
+            for col in range(1, 7):
+                c = ws.cell(row=2, column=col)
+                c.font = Font(name="Microsoft YaHei", size=10)
+                c.alignment = Alignment(horizontal="left" if col < 4 else "left", vertical="center")
+                c.border = thin_border
+                
+            # 3. 表头行 A3:F3
+            headers = ["序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"]
+            ws.row_dimensions[3].height = 26
+            header_fill = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
+            
+            for col_idx, h in enumerate(headers, start=1):
+                c = ws.cell(row=3, column=col_idx, value=h)
+                c.font = Font(name="Microsoft YaHei", size=10, bold=True)
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.fill = header_fill
+                c.border = thin_border
+                
+            # 4. 数据行
+            green_fill = PatternFill(start_color="86EFAC", end_color="86EFAC", fill_type="solid")  # 柔和浅绿
+            
+            for r_idx, it in enumerate(active, start=4):
+                ws.row_dimensions[r_idx].height = 24
+                
+                # 序号
+                c1 = ws.cell(row=r_idx, column=1, value=it["seq"])
+                c1.alignment = Alignment(horizontal="center", vertical="center")
+                c1.font = Font(name="Microsoft YaHei", size=10)
+                c1.border = thin_border
+                
+                # 工作内容
+                c2 = ws.cell(row=r_idx, column=2, value=it["content"])
+                c2.alignment = Alignment(horizontal="left", vertical="center")
+                c2.font = Font(name="Microsoft YaHei", size=10)
+                c2.border = thin_border
+                
+                # 紧急程度
+                c3 = ws.cell(row=r_idx, column=3, value=it["urgency"])
+                c3.alignment = Alignment(horizontal="center", vertical="center")
+                c3.font = Font(name="Microsoft YaHei", size=10)
+                c3.border = thin_border
+                
+                # 计划完成时间
+                c4 = ws.cell(row=r_idx, column=4, value=it["plan_date"])
+                c4.alignment = Alignment(horizontal="center", vertical="center")
+                c4.font = Font(name="Microsoft YaHei", size=10)
+                c4.border = thin_border
+                
+                # 完成进度
+                c5 = ws.cell(row=r_idx, column=5, value=it["progress"])
+                c5.alignment = Alignment(horizontal="center", vertical="center")
+                c5.font = Font(name="Microsoft YaHei", size=10, bold=True)
+                c5.fill = green_fill
+                c5.border = thin_border
+                
+                # 备注
+                c6 = ws.cell(row=r_idx, column=6, value=it["remark"])
+                c6.alignment = Alignment(horizontal="left", vertical="center")
+                c6.font = Font(name="Microsoft YaHei", size=10)
+                c6.border = thin_border
+                
+            # 设置列宽
+            ws.column_dimensions["A"].width = 8
+            ws.column_dimensions["B"].width = 44
+            ws.column_dimensions["C"].width = 12
+            ws.column_dimensions["D"].width = 16
+            ws.column_dimensions["E"].width = 14
+            ws.column_dimensions["F"].width = 18
+            
+            wb.save(save_path)
+            wb.close()
+            
+            box = QMessageBox(self)
+            box.setWindowTitle("导出成功")
+            box.setText(f"工作汇报已成功导出到：\n{save_path}\n\n是否立即打开查看？")
+            btn_open = box.addButton("打开 Excel 查看", QMessageBox.AcceptRole)
+            box.addButton("关闭", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() == btn_open:
+                try:
+                    os.startfile(save_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"导出 Excel 发生异常:\n{str(e)}")
+
 # ----------------- 自定义文件夹规则管理弹窗 -----------------
 class FolderRuleManagerDialog(QDialog):
     def __init__(self, rules, active_rule_id, parent=None):
@@ -3055,6 +3592,12 @@ class MainWindow(QMainWindow):
         self.sync_status_lbl = QLabel("🟢 就绪")
         self.sync_status_lbl.setStyleSheet("background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
         
+        btn_weekly_report = QPushButton("📝 工作汇报 (周报)")
+        btn_weekly_report.setObjectName("PrimaryBtn")
+        btn_weekly_report.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
+        btn_weekly_report.setToolTip("自动统计本周新增与修改的项目成果，生成标准工作汇报表格")
+        btn_weekly_report.clicked.connect(self.open_weekly_report_dialog)
+
         btn_fill_excel = QPushButton("📊 填充资产到 Excel")
         btn_fill_excel.setObjectName("PrimaryBtn")
         btn_fill_excel.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
@@ -3079,6 +3622,7 @@ class MainWindow(QMainWindow):
 
         top_bar.addWidget(self.sync_status_lbl)
         top_bar.addStretch()
+        top_bar.addWidget(btn_weekly_report)
         top_bar.addWidget(btn_fill_excel)
         top_bar.addWidget(btn_sync_excel)
         top_bar.addWidget(btn_bind_excel)
@@ -3874,6 +4418,11 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(on_finished)
         progress.canceled.connect(worker.cancel)
         self.thread_pool.start(worker)
+
+    def open_weekly_report_dialog(self):
+        """打开工作汇报 (周报) 生成与导出对话框"""
+        dlg = WeeklyReportDialog(self.workspaces_v2, self)
+        dlg.exec()
 
     def open_excel_fill_dialog(self):
         """打开资产自动填充与同步到 Excel 对话框"""
