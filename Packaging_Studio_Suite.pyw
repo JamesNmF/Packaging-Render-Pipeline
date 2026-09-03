@@ -2366,18 +2366,33 @@ class WeeklyReportDialog(QDialog):
         self.lbl_summary = QLabel()
         self.lbl_summary.setStyleSheet("color: #9BA1B0; font-size: 12px; margin-left: 12px;")
 
+        btn_select_all = QPushButton("☑ 全选")
+        btn_select_all.setToolTip("勾选全部工作项")
+        btn_select_all.clicked.connect(lambda: self.set_all_selection(True))
+
+        btn_unselect_all = QPushButton("☐ 全不选")
+        btn_unselect_all.setToolTip("取消勾选全部工作项")
+        btn_unselect_all.clicked.connect(lambda: self.set_all_selection(False))
+
+        btn_invert = QPushButton("🔀 反选")
+        btn_invert.setToolTip("反转当前的勾选状态")
+        btn_invert.clicked.connect(self.invert_selection)
+
         top_ctrl.addWidget(self.btn_prev)
         top_ctrl.addWidget(self.lbl_week)
         top_ctrl.addWidget(self.btn_next)
         top_ctrl.addWidget(self.btn_this_week)
         top_ctrl.addWidget(self.lbl_summary)
         top_ctrl.addStretch()
+        top_ctrl.addWidget(btn_select_all)
+        top_ctrl.addWidget(btn_unselect_all)
+        top_ctrl.addWidget(btn_invert)
         layout.addLayout(top_ctrl)
 
         # 数据表格
         self.table = QTableWidget()
         self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels(["包含", "序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"])
+        self.table.setHorizontalHeaderLabels(["包含 ▾", "序号", "工作内容", "紧急程度", "计划完成时间", "完成进度", "备注"])
         
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -2408,6 +2423,7 @@ class WeeklyReportDialog(QDialog):
             }
         """)
         self.table.itemChanged.connect(self.on_table_item_changed)
+        self.table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         layout.addWidget(self.table)
 
         # 底部操作按钮栏
@@ -2558,9 +2574,34 @@ class WeeklyReportDialog(QDialog):
                     prog_item.setBackground(QColor("#1E2024"))
                     prog_item.setForeground(QColor("#6B7280"))
                     
-            if is_sel:
-                seq_num += 1
+    def on_header_clicked(self, logical_index):
+        if logical_index == 0:
+            # 点击“包含 ▾”列头，智能切换全选/全不选
+            any_unchecked = any(not it.get("selected", True) for it in self.items)
+            self.set_all_selection(any_unchecked)
+
+    def set_all_selection(self, state=True):
+        """批量全选 / 全不选"""
+        self.table.blockSignals(True)
+        for row, item in enumerate(self.items):
+            item["selected"] = state
+            chk_item = self.table.item(row, 0)
+            if chk_item:
+                chk_item.setCheckState(Qt.Checked if state else Qt.Unchecked)
         self.table.blockSignals(False)
+        self.refresh_sequence_numbers()
+
+    def invert_selection(self):
+        """反选"""
+        self.table.blockSignals(True)
+        for row, item in enumerate(self.items):
+            cur = item.get("selected", True)
+            item["selected"] = not cur
+            chk_item = self.table.item(row, 0)
+            if chk_item:
+                chk_item.setCheckState(Qt.Checked if not cur else Qt.Unchecked)
+        self.table.blockSignals(False)
+        self.refresh_sequence_numbers()
 
     def add_manual_row(self):
         today = datetime.datetime.now()
