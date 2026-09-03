@@ -243,26 +243,46 @@ classes = (
 
 addon_keymaps = []
 
+def hide_system_console_silently():
+    """静默隐藏 Windows 控制台黑框，防止黑框干扰并避免误点 X 导致 Blender 退出"""
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd != 0:
+            # 0 = SW_HIDE (静默隐藏窗口)
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+    except Exception:
+        pass
+
 def register():
+    # 启动瞬间与延时 100ms 两次静默隐藏控制台
+    hide_system_console_silently()
+    try:
+        bpy.app.timers.register(hide_system_console_silently, first_interval=0.1)
+        bpy.app.timers.register(hide_system_console_silently, first_interval=0.5)
+    except Exception:
+        pass
+
     for cls in classes:
-        bpy.utils.register_class(cls)
+        try:
+            bpy.utils.register_class(cls)
+        except Exception:
+            pass
+            
+    try:
+        bpy.types.NODE_HT_header.append(draw_shader_header)
+    except Exception:
+        pass
+        
+    try:
+        bpy.types.NODE_MT_context_menu.append(draw_shader_context_menu)
+    except Exception:
+        pass
         
     if on_load_blend_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_load_blend_post)
         
-    try:
-        bpy.types.NODE_HT_header.remove(draw_shader_header)
-    except Exception:
-        pass
-    bpy.types.NODE_HT_header.append(draw_shader_header)
-
-    try:
-        bpy.types.NODE_MT_context_menu.remove(draw_shader_context_menu)
-    except Exception:
-        pass
-    bpy.types.NODE_MT_context_menu.append(draw_shader_context_menu)
-
-    # 绑定快捷键 Alt + O (字母 O) 与 Alt + 0 (数字 0)
+    # 注册快捷键
     wm = bpy.context.window_manager
     kc = wm.keyconfigs.addon
     if kc:

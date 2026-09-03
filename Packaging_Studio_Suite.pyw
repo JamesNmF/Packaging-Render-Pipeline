@@ -3464,13 +3464,13 @@ class ManualProjectCreateDialog(QDialog):
                 except Exception:
                     pass
                     
-        # 拉起 Blender
+        # 拉起 Blender (使用系统独立关联启动，彻底杜绝伴生控制台黑框)
         if self.chk_open_blender.isChecked() and os.path.exists(target_blend):
             try:
-                subprocess.Popen([BLENDER_EXE, target_blend])
+                os.startfile(target_blend)
             except Exception:
                 try:
-                    os.startfile(target_blend)
+                    subprocess.Popen([BLENDER_EXE, target_blend], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
                 except Exception:
                     pass
                     
@@ -4962,11 +4962,11 @@ class MainWindow(QMainWindow):
             if auto_open_bl and not opened_blend:
                 if os.path.exists(target_blend):
                     try:
-                        subprocess.Popen([BLENDER_EXE, target_blend])
+                        os.startfile(target_blend)
                         opened_blend = target_blend
                     except Exception:
                         try:
-                            os.startfile(target_blend)
+                            subprocess.Popen([BLENDER_EXE, target_blend], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
                             opened_blend = target_blend
                         except Exception:
                             pass
