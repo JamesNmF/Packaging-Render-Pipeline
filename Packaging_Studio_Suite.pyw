@@ -2266,7 +2266,7 @@ def scan_weekly_report_items(workspaces_v2, start_dt, end_dt):
                         work_content += f"*{render_count}"
                         
                     dt = datetime.datetime.fromtimestamp(latest_mtime) if latest_mtime > 0 else start_dt
-                    plan_date = f"{dt.year}/{dt.month}/{dt.day}"
+                    plan_date = f"{dt.month}/{dt.day}"
                     
                     projects_map[sku_dir] = {
                         "selected": True,
@@ -2621,7 +2621,7 @@ class WeeklyReportDialog(QDialog):
 
     def add_manual_row(self):
         today = datetime.datetime.now()
-        date_str = f"{today.year}/{today.month}/{today.day}"
+        date_str = f"{today.month}/{today.day}"
         new_it = {
             "selected": True,
             "brand": "",
@@ -2736,10 +2736,10 @@ class WeeklyReportDialog(QDialog):
                     for c in range(1, 7):
                         ws.cell(row=r, column=c).value = None
                         
-                # 更新汇报日期
-                today = datetime.datetime.now()
-                today_str = f"{today.year}/{today.month}/{today.day}"
-                ws["E2"] = f"汇报日期：{today_str}"
+                # 更新汇报日期为当周周六的完整日期 (如 2026/9/5)
+                sat_dt = start_dt + datetime.timedelta(days=5)
+                sat_str = f"{sat_dt.year}/{sat_dt.month}/{sat_dt.day}"
+                ws["E2"] = f"汇报日期：{sat_str}"
                 
                 # 填入勾选的数据项
                 for idx, it in enumerate(active, start=4):
@@ -2752,12 +2752,14 @@ class WeeklyReportDialog(QDialog):
                     # 紧急程度
                     c3 = ws.cell(row=idx, column=3, value=it["urgency"])
                     
-                    # 计划完成时间 (尝试转换为 date 对象)
-                    raw_d = it["plan_date"]
+                    # 计划完成时间 (转换为 date 对象并按月日显示)
+                    raw_d = str(it["plan_date"]).strip()
                     d_val = raw_d
                     try:
-                        parts = [int(p) for p in raw_d.split("/")]
-                        if len(parts) == 3:
+                        parts = [int(p) for p in re.findall(r'\d+', raw_d)]
+                        if len(parts) == 2:
+                            d_val = datetime.datetime(start_dt.year, parts[0], parts[1])
+                        elif len(parts) == 3:
                             d_val = datetime.datetime(parts[0], parts[1], parts[2])
                     except Exception:
                         pass
@@ -2785,7 +2787,7 @@ class WeeklyReportDialog(QDialog):
                         if st["border"]:
                             cell.border = copy(st["border"])
                         if col_i == 3:
-                            cell.number_format = "yyyy/m/d"  # 强制统一为年月日格式 (如 2026/8/21)
+                            cell.number_format = "m/d"  # 仅显示月/日 (如 8/21, 9/2)
                         else:
                             cell.number_format = st["number_format"]
                         
@@ -2813,13 +2815,13 @@ class WeeklyReportDialog(QDialog):
                 for col in range(1, 7):
                     ws.cell(row=1, column=col).border = thin_border
                     
-                today = datetime.datetime.now()
-                today_str = f"{today.year}/{today.month}/{today.day}"
+                sat_dt = start_dt + datetime.timedelta(days=5)
+                sat_str = f"{sat_dt.year}/{sat_dt.month}/{sat_dt.day}"
                 
                 ws["A2"] = "汇报人："
                 ws["B2"] = "部门："
                 ws["C2"] = "职务："
-                ws["D2"] = f"汇报日期：{today_str}"
+                ws["D2"] = f"汇报日期：{sat_str}"
                 ws.row_dimensions[2].height = 24
                 
                 for col in range(1, 7):
@@ -2859,10 +2861,21 @@ class WeeklyReportDialog(QDialog):
                     c3.font = Font(name="Microsoft YaHei", size=10)
                     c3.border = thin_border
                     
-                    c4 = ws.cell(row=r_idx, column=4, value=it["plan_date"])
+                    # 计划完成时间 (月/日)
+                    raw_d = str(it["plan_date"]).strip()
+                    d_val = raw_d
+                    try:
+                        parts = [int(p) for p in re.findall(r'\d+', raw_d)]
+                        if len(parts) == 2:
+                            d_val = datetime.datetime(start_dt.year, parts[0], parts[1])
+                        elif len(parts) == 3:
+                            d_val = datetime.datetime(parts[0], parts[1], parts[2])
+                    except Exception:
+                        pass
+                    c4 = ws.cell(row=r_idx, column=4, value=d_val)
                     c4.alignment = Alignment(horizontal="center", vertical="center")
                     c4.font = Font(name="Microsoft YaHei", size=10)
-                    c4.number_format = "yyyy/m/d"
+                    c4.number_format = "m/d"
                     c4.border = thin_border
                     
                     c5 = ws.cell(row=r_idx, column=5, value=it["progress"])
@@ -2883,17 +2896,17 @@ class WeeklyReportDialog(QDialog):
                 ws.column_dimensions["E"].width = 14
                 ws.column_dimensions["F"].width = 18
             
-            # 无论是否从模板加载，均显式格式化 D 列日期 (yyyy/m/d) 与 E 列数据条
+            # 无论是否从模板加载，均显式格式化 D 列日期 (m/d) 与 E 列数据条
             try:
                 from openpyxl.formatting.rule import DataBarRule
                 max_r = max(len(active) + 3, 4)
                 
-                # 确保 D 列统一为 yyyy/m/d 年月日，E 列为数值与 0% 格式
+                # 确保 D 列统一为 m/d 月/日，E 列为数值与 0% 格式
                 for r in range(4, max_r + 1):
                     # D 列: 计划完成时间
                     cell_d = ws.cell(row=r, column=4)
                     if cell_d.value is not None:
-                        cell_d.number_format = "yyyy/m/d"
+                        cell_d.number_format = "m/d"
                         
                     # E 列: 完成进度
                     cell_e = ws.cell(row=r, column=5)
