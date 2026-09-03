@@ -2784,7 +2784,10 @@ class WeeklyReportDialog(QDialog):
                             cell.alignment = copy(st["alignment"])
                         if st["border"]:
                             cell.border = copy(st["border"])
-                        cell.number_format = st["number_format"]
+                        if col_i == 3:
+                            cell.number_format = "yyyy/m/d"  # 强制统一为年月日格式 (如 2026/8/21)
+                        else:
+                            cell.number_format = st["number_format"]
                         
             else:
                 # 模板不存在时使用原生标准样式创建
@@ -2859,6 +2862,7 @@ class WeeklyReportDialog(QDialog):
                     c4 = ws.cell(row=r_idx, column=4, value=it["plan_date"])
                     c4.alignment = Alignment(horizontal="center", vertical="center")
                     c4.font = Font(name="Microsoft YaHei", size=10)
+                    c4.number_format = "yyyy/m/d"
                     c4.border = thin_border
                     
                     c5 = ws.cell(row=r_idx, column=5, value=it["progress"])
@@ -2879,22 +2883,28 @@ class WeeklyReportDialog(QDialog):
                 ws.column_dimensions["E"].width = 14
                 ws.column_dimensions["F"].width = 18
             
-            # 无论是否从模板加载，均显式添加绿色数据条条件格式 (Data Bar)
+            # 无论是否从模板加载，均显式格式化 D 列日期 (yyyy/m/d) 与 E 列数据条
             try:
                 from openpyxl.formatting.rule import DataBarRule
                 max_r = max(len(active) + 3, 4)
                 
-                # 确保 E 列单元格为数值和 0% 格式
+                # 确保 D 列统一为 yyyy/m/d 年月日，E 列为数值与 0% 格式
                 for r in range(4, max_r + 1):
-                    cell = ws.cell(row=r, column=5)
-                    if cell.value is not None:
+                    # D 列: 计划完成时间
+                    cell_d = ws.cell(row=r, column=4)
+                    if cell_d.value is not None:
+                        cell_d.number_format = "yyyy/m/d"
+                        
+                    # E 列: 完成进度
+                    cell_e = ws.cell(row=r, column=5)
+                    if cell_e.value is not None:
                         try:
-                            if isinstance(cell.value, str):
-                                val_f = float(cell.value.replace("%", "").strip()) / 100.0
-                                cell.value = val_f
+                            if isinstance(cell_e.value, str):
+                                val_f = float(cell_e.value.replace("%", "").strip()) / 100.0
+                                cell_e.value = val_f
                         except Exception:
                             pass
-                        cell.number_format = "0%"
+                        cell_e.number_format = "0%"
                         
                 databar_rule = DataBarRule(
                     start_type="num",
@@ -2908,7 +2918,7 @@ class WeeklyReportDialog(QDialog):
                 )
                 ws.conditional_formatting.add(f"E4:E{max_r}", databar_rule)
             except Exception as cf_err:
-                print(f"[WeeklyReport] 添加条件格式数据条警告: {cf_err}")
+                print(f"[WeeklyReport] 添加格式与数据条警告: {cf_err}")
 
             wb.save(save_path)
             wb.close()
