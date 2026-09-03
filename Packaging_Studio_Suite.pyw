@@ -2556,8 +2556,12 @@ class WeeklyReportDialog(QDialog):
     def refresh_sequence_numbers(self):
         self.table.blockSignals(True)
         seq_num = 1
-        for row, it in enumerate(self.items):
-            is_sel = it.get("selected", True)
+        for row in range(self.table.rowCount()):
+            chk_item = self.table.item(row, 0)
+            is_sel = (chk_item.checkState() == Qt.Checked) if chk_item else False
+            if row < len(self.items):
+                self.items[row]["selected"] = is_sel
+                
             seq_item = self.table.item(row, 1)
             content_item = self.table.item(row, 2)
             prog_item = self.table.item(row, 5)
@@ -2574,17 +2578,27 @@ class WeeklyReportDialog(QDialog):
                     prog_item.setBackground(QColor("#1E2024"))
                     prog_item.setForeground(QColor("#6B7280"))
                     
+            if is_sel:
+                seq_num += 1
+        self.table.blockSignals(False)
+
     def on_header_clicked(self, logical_index):
         if logical_index == 0:
             # 点击“包含 ▾”列头，智能切换全选/全不选
-            any_unchecked = any(not it.get("selected", True) for it in self.items)
+            any_unchecked = False
+            for r in range(self.table.rowCount()):
+                chk = self.table.item(r, 0)
+                if chk and chk.checkState() != Qt.Checked:
+                    any_unchecked = True
+                    break
             self.set_all_selection(any_unchecked)
 
     def set_all_selection(self, state=True):
         """批量全选 / 全不选"""
         self.table.blockSignals(True)
-        for row, item in enumerate(self.items):
-            item["selected"] = state
+        for row in range(self.table.rowCount()):
+            if row < len(self.items):
+                self.items[row]["selected"] = state
             chk_item = self.table.item(row, 0)
             if chk_item:
                 chk_item.setCheckState(Qt.Checked if state else Qt.Unchecked)
@@ -2594,12 +2608,14 @@ class WeeklyReportDialog(QDialog):
     def invert_selection(self):
         """反选"""
         self.table.blockSignals(True)
-        for row, item in enumerate(self.items):
-            cur = item.get("selected", True)
-            item["selected"] = not cur
+        for row in range(self.table.rowCount()):
             chk_item = self.table.item(row, 0)
             if chk_item:
-                chk_item.setCheckState(Qt.Checked if not cur else Qt.Unchecked)
+                cur = (chk_item.checkState() == Qt.Checked)
+                new_st = not cur
+                chk_item.setCheckState(Qt.Checked if new_st else Qt.Unchecked)
+                if row < len(self.items):
+                    self.items[row]["selected"] = new_st
         self.table.blockSignals(False)
         self.refresh_sequence_numbers()
 
@@ -2630,17 +2646,32 @@ class WeeklyReportDialog(QDialog):
             self.populate_table()
 
     def get_active_items(self):
+        """直接从 UI 表格当前真实的勾选状态和各列文本中提取活动项"""
         active = []
         seq = 1
-        for it in self.items:
-            if it.get("selected", True):
+        for row in range(self.table.rowCount()):
+            chk_item = self.table.item(row, 0)
+            is_sel = (chk_item.checkState() == Qt.Checked) if chk_item else False
+            if is_sel:
+                content_item = self.table.item(row, 2)
+                urgency_item = self.table.item(row, 3)
+                date_item = self.table.item(row, 4)
+                prog_item = self.table.item(row, 5)
+                remark_item = self.table.item(row, 6)
+                
+                content = content_item.text().strip() if content_item else ""
+                urgency = urgency_item.text().strip() if urgency_item else "一般"
+                plan_date = date_item.text().strip() if date_item else ""
+                progress = prog_item.text().strip() if prog_item else "100%"
+                remark = remark_item.text().strip() if remark_item else ""
+                
                 active.append({
                     "seq": seq,
-                    "content": it.get("content", ""),
-                    "urgency": it.get("urgency", "一般"),
-                    "plan_date": it.get("plan_date", ""),
-                    "progress": it.get("progress", "100%"),
-                    "remark": it.get("remark", "")
+                    "content": content,
+                    "urgency": urgency,
+                    "plan_date": plan_date,
+                    "progress": progress,
+                    "remark": remark
                 })
                 seq += 1
         return active
