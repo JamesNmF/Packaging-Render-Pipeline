@@ -27,6 +27,7 @@ import threading
 import webbrowser
 import subprocess
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 
 # 启动 Splash 管理 (PyInstaller 原生 C 语言启动画面接口)
 try:
@@ -649,6 +650,8 @@ def get_fast_disk_thumbnail_path(orig_img_path, size=(220, 220)):
     if not orig_img_path or not os.path.exists(orig_img_path):
         return None
     try:
+        if os.path.getsize(orig_img_path) == 0:
+            return None
         mtime = os.path.getmtime(orig_img_path)
         img_id = hashlib.md5(f"{orig_img_path}_{mtime}_{size[0]}x{size[1]}".encode("utf-8")).hexdigest()
         thumb_path = os.path.join(THUMB_CACHE_DIR, f"{img_id}.jpg")
@@ -660,10 +663,19 @@ def get_fast_disk_thumbnail_path(orig_img_path, size=(220, 220)):
             if im.mode in ("RGBA", "P"):
                 im = im.convert("RGB")
             im.thumbnail(size, Image.Resampling.LANCZOS)
-            im.save(thumb_path, "JPEG", quality=85, optimize=True)
+            temp_thumb = f"{thumb_path}.{threading.get_ident()}_{time.time_ns()}.tmp"
+            im.save(temp_thumb, "JPEG", quality=85, optimize=True)
+            try:
+                os.replace(temp_thumb, thumb_path)
+            except OSError:
+                if os.path.exists(temp_thumb):
+                    try:
+                        os.remove(temp_thumb)
+                    except Exception:
+                        pass
             return thumb_path
     except Exception:
-        return orig_img_path
+        return None
 
 def extract_images_from_excel_zip(excel_path):
     if not excel_path or not os.path.exists(excel_path):
@@ -798,63 +810,68 @@ def parse_and_cache_excel(excel_path, brand_aliases=None, ignored_brands=None):
         import openpyxl
         cell_images = extract_images_from_excel_zip(excel_path)
         wb = openpyxl.load_workbook(excel_path, data_only=True, read_only=True)
-        sheet = wb.active
-        
-        headers = {}
-        for col_idx, cell in enumerate(sheet[1], start=1):
-            if cell.value:
-                headers[str(cell.value).strip()] = col_idx
-                
-        sku_col = headers.get("产品名称") or headers.get("SKU") or headers.get("品名") or headers.get("产品命名") or 2
-        brand_col = headers.get("品牌") or headers.get("客户") or 1
-        cat_col = headers.get("业务形态") or headers.get("分类") or headers.get("类别") or None
-        time_col = headers.get("创建时间") or headers.get("日期") or headers.get("录入时间") or None
-        path_col = headers.get("文件路径") or headers.get("路径") or None
-        
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            if not row or not any(row):
-                continue
-            sku_val = str(row[sku_col - 1]).strip() if len(row) >= sku_col and row[sku_col - 1] else ""
-            if not sku_val or sku_val == "None":
-                continue
-            brand_val = str(row[brand_col - 1]).strip() if len(row) >= brand_col and row[brand_col - 1] else ""
-            if brand_val == "None":
-                brand_val = ""
+        try:
+            sheet = wb.active
             
-            p_val = str(row[path_col - 1]).strip() if path_col and len(row) >= path_col and row[path_col - 1] else ""
-            if p_val == "None":
-                p_val = ""
-                
-            if (not brand_val or brand_val.isdigit()) and p_val:
-                norm_p = p_val.replace("\\", "/")
-                parts = [part for part in norm_p.split("/") if part]
-                if len(parts) >= 2:
-                    brand_val = parts[-2]
-            if not brand_val or brand_val.isdigit():
-                brand_val = "柏缇"
-                
-            brand_val = resolve_brand_name(brand_val, brand_aliases, ignored_brands)
-            cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
-            time_raw = row[time_col - 1] if time_col and len(row) >= time_col else ""
-            time_val = str(time_raw).strip() if time_raw else ""
-            if time_val == "None":
-                time_val = ""
-            excel_mtime = parse_time_to_timestamp(time_raw)
-                
-            img_path = cell_images.get(row_idx, "")
+            headers = {}
+            for col_idx, cell in enumerate(sheet[1], start=1):
+                if cell.value:
+                    headers[str(cell.value).strip()] = col_idx
+                    
+            sku_col = headers.get("产品名称") or headers.get("SKU") or headers.get("品名") or headers.get("产品命名") or 2
+            brand_col = headers.get("品牌") or headers.get("客户") or 1
+            cat_col = headers.get("业务形态") or headers.get("分类") or headers.get("类别") or None
+            time_col = headers.get("创建时间") or headers.get("日期") or headers.get("录入时间") or None
+            path_col = headers.get("文件路径") or headers.get("路径") or None
             
-            projects.append({
-                "source": "excel",
-                "brand": brand_val,
-                "sku": sku_val,
-                "cat": cat_val,
-                "path": p_val,
-                "thumbnail": img_path,
-                "time": time_val,
-                "row_idx": row_idx,
-                "mtime": excel_mtime
-            })
-        wb.close()
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                if not row or not any(row):
+                    continue
+                sku_val = str(row[sku_col - 1]).strip() if len(row) >= sku_col and row[sku_col - 1] else ""
+                if not sku_val or sku_val == "None":
+                    continue
+                brand_val = str(row[brand_col - 1]).strip() if len(row) >= brand_col and row[brand_col - 1] else ""
+                if brand_val == "None":
+                    brand_val = ""
+                
+                p_val = str(row[path_col - 1]).strip() if path_col and len(row) >= path_col and row[path_col - 1] else ""
+                if p_val == "None":
+                    p_val = ""
+                    
+                if (not brand_val or brand_val.isdigit()) and p_val:
+                    norm_p = p_val.replace("\\", "/")
+                    parts = [part for part in norm_p.split("/") if part]
+                    if len(parts) >= 2:
+                        brand_val = parts[-2]
+                if not brand_val or brand_val.isdigit():
+                    brand_val = "柏缇"
+                    
+                brand_val = resolve_brand_name(brand_val, brand_aliases, ignored_brands)
+                cat_val = str(row[cat_col - 1]).strip() if cat_col and len(row) >= cat_col and row[cat_col - 1] else ""
+                time_raw = row[time_col - 1] if time_col and len(row) >= time_col else ""
+                time_val = str(time_raw).strip() if time_raw else ""
+                if time_val == "None":
+                    time_val = ""
+                excel_mtime = parse_time_to_timestamp(time_raw)
+                    
+                img_path = cell_images.get(row_idx, "")
+                
+                projects.append({
+                    "source": "excel",
+                    "brand": brand_val,
+                    "sku": sku_val,
+                    "cat": cat_val,
+                    "path": p_val,
+                    "thumbnail": img_path,
+                    "time": time_val,
+                    "row_idx": row_idx,
+                    "mtime": excel_mtime
+                })
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
     except Exception:
         pass
     return projects
@@ -1268,7 +1285,8 @@ def batch_sync_all_thumbnails_to_excel(excel_path, projects):
 
 # ----------------- 异步图像加载器 (Qt 线程池) -----------------
 class ImageLoadSignal(QObject):
-    finished = Signal(str, QPixmap)
+    finished = Signal(str, QImage)
+    failed = Signal(str)
 
 class ImageLoadTask(QRunnable):
     def __init__(self, img_path, target_size=(220, 220)):
@@ -1280,12 +1298,17 @@ class ImageLoadTask(QRunnable):
     def run(self):
         try:
             fast_p = get_fast_disk_thumbnail_path(self.img_path, self.target_size)
-            if fast_p and os.path.exists(fast_p):
-                pm = QPixmap(fast_p)
-                if not pm.isNull():
-                    self.signals.finished.emit(self.img_path, pm)
+            if fast_p and os.path.exists(fast_p) and os.path.getsize(fast_p) > 0:
+                qimg = QImage(fast_p)
+                if not qimg.isNull():
+                    self.signals.finished.emit(self.img_path, qimg)
+                    return
+            self.signals.failed.emit(self.img_path)
         except Exception:
-            pass
+            try:
+                self.signals.failed.emit(self.img_path)
+            except Exception:
+                pass
 
 # ----------------- 异步全量数据加载 Worker (Qt 信号槽) -----------------
 class DataLoaderSignals(QObject):
@@ -1590,7 +1613,8 @@ class GalleryModel(QAbstractListModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.projects = []
-        self.pixmap_cache = {}
+        self.pixmap_cache = OrderedDict()
+        self.max_cache_size = 300
         self.loading_set = set()
 
     def rowCount(self, parent=QModelIndex()):
@@ -1613,6 +1637,25 @@ class GalleryModel(QAbstractListModel):
         if 0 <= row < len(self.projects):
             return self.projects[row]
         return None
+
+    def get_pixmap(self, img_path):
+        if not img_path or img_path not in self.pixmap_cache:
+            return None
+        pix = self.pixmap_cache[img_path]
+        if pix is not None:
+            self.pixmap_cache.move_to_end(img_path)
+        return pix
+
+    def set_pixmap(self, img_path, pixmap):
+        if not img_path:
+            return
+        if img_path in self.pixmap_cache:
+            self.pixmap_cache.move_to_end(img_path)
+            self.pixmap_cache[img_path] = pixmap
+        else:
+            self.pixmap_cache[img_path] = pixmap
+            if len(self.pixmap_cache) > self.max_cache_size:
+                self.pixmap_cache.popitem(last=False)
 
 # ----------------- 卡片 Delegate (支持点击命中测试与原生轻触交互) -----------------
 class GalleryCardDelegate(QStyledItemDelegate):
@@ -1697,13 +1740,18 @@ class GalleryCardDelegate(QStyledItemDelegate):
 
         img_path = proj.get("thumbnail")
         model = index.model()
-        pix = model.pixmap_cache.get(img_path) if img_path else None
+        has_cache = bool(img_path and (img_path in model.pixmap_cache))
+        pix = model.get_pixmap(img_path) if has_cache else None
 
         if pix and not pix.isNull():
             scaled = pix.scaled(thumb_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             x_off = thumb_rect.left() + (thumb_rect.width() - scaled.width()) // 2
             y_off = thumb_rect.top() + (thumb_rect.height() - scaled.height()) // 2
             painter.drawPixmap(x_off, y_off, scaled)
+        elif has_cache and pix is None:
+            # 明确标记为损坏或无法解析的图片，不再重试，防止 CPU 线程死循环
+            painter.setPen(QColor("#EF4444"))
+            painter.drawText(thumb_rect, Qt.AlignCenter, "⚠️ 破损图片")
         else:
             painter.setPen(QColor("#6B7280"))
             painter.drawText(thumb_rect, Qt.AlignCenter, "📦 待渲染工程")
@@ -1712,6 +1760,7 @@ class GalleryCardDelegate(QStyledItemDelegate):
                 model.loading_set.add(img_path)
                 task = ImageLoadTask(img_path)
                 task.signals.finished.connect(self.on_image_loaded)
+                task.signals.failed.connect(self.on_image_failed)
                 self.thread_pool.start(task)
 
         # 缩略图右下角浮动工作盘角标 (如 E:主力, D:归档)
@@ -1807,11 +1856,24 @@ class GalleryCardDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def on_image_loaded(self, img_path, pixmap):
-        model = self.parent_view.model()
-        model.pixmap_cache[img_path] = pixmap
+    def on_image_loaded(self, img_path, qimg):
+        model = self.parent_view.model() if self.parent_view else None
+        if not model:
+            return
+        pix = QPixmap.fromImage(qimg)
+        model.set_pixmap(img_path, pix)
         model.loading_set.discard(img_path)
-        self.parent_view.viewport().update()
+        if self.parent_view:
+            self.parent_view.viewport().update()
+
+    def on_image_failed(self, img_path):
+        model = self.parent_view.model() if self.parent_view else None
+        if not model:
+            return
+        model.set_pixmap(img_path, None)
+        model.loading_set.discard(img_path)
+        if self.parent_view:
+            self.parent_view.viewport().update()
 
 # ----------------- 丝滑阻尼平滑像素级滚动视图 -----------------
 class SmoothGalleryView(QListView):
@@ -1860,6 +1922,7 @@ class ExcelSyncWorker(QRunnable):
             
         total = len(valid_items)
         success_count = 0
+        wb = None
         try:
             import openpyxl
             from openpyxl.drawing.image import Image as OpenpyxlImage
@@ -1889,7 +1952,6 @@ class ExcelSyncWorker(QRunnable):
             
             for idx, item in enumerate(valid_items, start=1):
                 if self.is_cancelled:
-                    wb.close()
                     self.signals.finished.emit(False, "已取消同步操作。")
                     return
                     
@@ -1927,12 +1989,17 @@ class ExcelSyncWorker(QRunnable):
                     pass
                     
             wb.save(self.excel_path)
-            wb.close()
             self.signals.finished.emit(True, f"同步完成：已更新 {success_count} 个项目的效果图。")
         except PermissionError:
             self.signals.finished.emit(False, "无法保存 Excel，请先关闭正在打开《产品列表.xlsx》的程序后重试。")
         except Exception as e:
             self.signals.finished.emit(False, f"同步 Excel 发生异常: {str(e)}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
 # ----------------- 全量资产自动填充/同步到 Excel 引擎 -----------------
 class ExcelFullFillSignals(QObject):
@@ -1960,6 +2027,7 @@ class ExcelFullFillWorker(QRunnable):
         added_count = 0
         img_count = 0
         updated_count = 0
+        wb = None
 
         try:
             import openpyxl
@@ -2043,7 +2111,6 @@ class ExcelFullFillWorker(QRunnable):
 
             for idx, item in enumerate(self.projects, start=1):
                 if self.is_cancelled:
-                    wb.close()
                     self.signals.finished.emit(False, {}, "已取消填充同步操作。")
                     return
 
@@ -2118,8 +2185,6 @@ class ExcelFullFillWorker(QRunnable):
                         pass
 
             wb.save(self.excel_path)
-            wb.close()
-
             stats = {
                 "total": total,
                 "added": added_count,
@@ -2131,6 +2196,12 @@ class ExcelFullFillWorker(QRunnable):
             self.signals.finished.emit(False, {}, "无法保存 Excel，请先关闭正在打开《产品列表.xlsx》的程序后重试。")
         except Exception as e:
             self.signals.finished.emit(False, {}, f"同步异常: {str(e)}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
 # ----------------- 资产自动填充 Excel 对话框 -----------------
 class ExcelFillDialog(AnimatedDialog):
@@ -2740,6 +2811,7 @@ class WeeklyReportDialog(AnimatedDialog):
         if not save_path:
             return
             
+        wb = None
         try:
             import openpyxl
             from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -2971,7 +3043,6 @@ class WeeklyReportDialog(AnimatedDialog):
                 print(f"[WeeklyReport] 添加格式与数据条警告: {cf_err}")
 
             wb.save(save_path)
-            wb.close()
             
             box = QMessageBox(self)
             box.setWindowTitle("导出成功")
@@ -2984,8 +3055,16 @@ class WeeklyReportDialog(AnimatedDialog):
                     os.startfile(save_path)
                 except Exception:
                     pass
+        except PermissionError:
+            QMessageBox.critical(self, "导出失败", f"无法保存 Excel！\n目标文件正在被 WPS 或 Office 打开，请先关闭后重试：\n{save_path}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", f"导出 Excel 发生异常:\n{str(e)}")
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
 # ----------------- 自定义文件夹规则管理弹窗 -----------------
 class FolderRuleManagerDialog(AnimatedDialog):
@@ -3791,6 +3870,10 @@ class MainWindow(QMainWindow):
         self.is_force_quitting = True
         if hasattr(self, "tray_icon"):
             self.tray_icon.hide()
+        try:
+            QThreadPool.globalInstance().waitForDone(800)
+        except Exception:
+            pass
         QApplication.quit()
 
     def configure_close_action(self):

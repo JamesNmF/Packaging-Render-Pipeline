@@ -74,6 +74,7 @@ function exportArtboardsToTextures() {
 
     var usedNames = {};
     var successCount = 0;
+    var failedList = [];
 
     // 逐画板导出
     for (var a = 0; a < artboardCount; a++) {
@@ -98,15 +99,22 @@ function exportArtboardsToTextures() {
             doc.exportFile(destFile, ExportType.PNG24, exportOptions);
             successCount++;
         } catch (err) {
-            // 单张异常记录但不阻断整体导出
+            var errMsg = err && err.message ? err.message : String(err);
+            failedList.push(finalName + " (" + errMsg + ")");
         }
     }
 
-    var successMsg = "🎉 【美术资产中枢 · 贴图直出成功】\n" +
+    var successMsg = "🎉 【美术资产中枢 · 贴图直出完成】\n" +
                      "------------------------------------\n" +
                      "📁 导出目标：" + targetTextureFolder.fsName + "\n" +
-                     "🖼️ 成功导出画板：" + successCount + " / " + artboardCount + " 张 (300 DPI 高保真 PNG)\n\n" +
-                     "是否立即打开贴图文件夹检视？";
+                     "🖼️ 成功导出画板：" + successCount + " / " + artboardCount + " 张 (300 DPI 高保真 PNG)\n";
+
+    if (failedList.length > 0) {
+        successMsg += "\n⚠️ 导出失败画板 (" + failedList.length + " 个):\n - " + failedList.join("\n - ") + "\n\n";
+    } else {
+        successMsg += "\n";
+    }
+    successMsg += "是否立即打开贴图文件夹检视？";
 
     if (confirm(successMsg)) {
         targetTextureFolder.execute();
