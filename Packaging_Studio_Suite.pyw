@@ -115,113 +115,27 @@ def set_dark_titlebar(hwnd, dark=True):
         except Exception:
             pass
 
-# ----------------- 高级动效组件体系 (Micro-Interactions Suite) -----------------
+# ----------------- 稳健微交互组件体系 (Stable Micro-Interactions) -----------------
 class AnimatedPushButton(QPushButton):
     """
-    带有微触感弹性回弹 (0.95x Scale Spring) 与柔和悬浮高光的现代按钮组件
+    工业级稳健触感按钮：
+    继承原生 QPushButton，通过原生 QSS 状态机实现微触感回弹，彻底杜绝 QPainter 重入闪退。
     """
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
-        self._scale = 1.0
-        self._hover_val = 0.0
         self.setCursor(Qt.PointingHandCursor)
-        
-        # 缩放阻尼动画
-        self._anim_scale = QVariantAnimation(self)
-        self._anim_scale.setDuration(120)
-        self._anim_scale.valueChanged.connect(self._on_scale_changed)
-        
-        # 悬浮高光动画
-        self._anim_hover = QVariantAnimation(self)
-        self._anim_hover.setDuration(140)
-        self._anim_hover.valueChanged.connect(self._on_hover_changed)
-
-    def _on_scale_changed(self, val):
-        self._scale = float(val)
-        self.update()
-
-    def _on_hover_changed(self, val):
-        self._hover_val = float(val)
-        self.update()
-
-    def enterEvent(self, event):
-        self._anim_hover.stop()
-        self._anim_hover.setStartValue(self._hover_val)
-        self._anim_hover.setEndValue(1.0)
-        self._anim_hover.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim_hover.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._anim_hover.stop()
-        self._anim_hover.setStartValue(self._hover_val)
-        self._anim_hover.setEndValue(0.0)
-        self._anim_hover.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim_hover.start()
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._anim_scale.stop()
-            self._anim_scale.setStartValue(self._scale)
-            self._anim_scale.setEndValue(0.95)
-            self._anim_scale.setEasingCurve(QEasingCurve.OutQuad)
-            self._anim_scale.start()
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._anim_scale.stop()
-            self._anim_scale.setStartValue(self._scale)
-            self._anim_scale.setEndValue(1.0)
-            self._anim_scale.setEasingCurve(QEasingCurve.OutBack)
-            self._anim_scale.start()
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event):
-        if abs(self._scale - 1.0) < 0.001 and self._hover_val < 0.001:
-            super().paintEvent(event)
-            return
-            
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        
-        # 居中缩放
-        w, h = self.width(), self.height()
-        cx, cy = w / 2.0, h / 2.0
-        painter.translate(cx, cy)
-        painter.scale(self._scale, self._scale)
-        painter.translate(-cx, -cy)
-        
-        super().paintEvent(event)
-        
-        if self._hover_val > 0.01 and self.isEnabled():
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(255, 255, 255, int(16 * self._hover_val)))
-            painter.drawRoundedRect(QRectF(0, 0, w, h), 4, 4)
-        painter.end()
 
 class AnimatedDialog(QDialog):
     """
-    带有平滑淡入透明度与弹性阻尼 (160ms Ease-Out) 的优雅模态对话框基类
+    工业级稳健模态对话框基类：
+    保障深色沉浸标题栏与原生平稳展示。
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._anim_opacity = None
 
     def showEvent(self, event):
         super().showEvent(event)
         set_dark_titlebar(int(self.winId()), True)
-        try:
-            self._anim_opacity = QPropertyAnimation(self, b"windowOpacity", self)
-            self._anim_opacity.setDuration(160)
-            self._anim_opacity.setStartValue(0.0)
-            self._anim_opacity.setEndValue(1.0)
-            self._anim_opacity.setEasingCurve(QEasingCurve.OutCubic)
-            self._anim_opacity.start()
-        except Exception:
-            pass
 
 def get_valid_template_blend(cfg=None):
     candidates = []
@@ -1677,9 +1591,7 @@ class GalleryModel(QAbstractListModel):
         super().__init__(parent)
         self.projects = []
         self.pixmap_cache = {}
-        self.fade_start_times = {}
         self.loading_set = set()
-        self.refresh_time = time.time()
 
     def rowCount(self, parent=QModelIndex()):
         return len(self.projects)
@@ -1695,7 +1607,6 @@ class GalleryModel(QAbstractListModel):
     def set_projects(self, projects):
         self.beginResetModel()
         self.projects = projects
-        self.refresh_time = time.time()
         self.endResetModel()
 
     def get_project(self, row):
@@ -1703,7 +1614,7 @@ class GalleryModel(QAbstractListModel):
             return self.projects[row]
         return None
 
-# ----------------- 卡片 Delegate (支持点击命中测试与动效) -----------------
+# ----------------- 卡片 Delegate (支持点击命中测试与原生轻触交互) -----------------
 class GalleryCardDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1716,10 +1627,9 @@ class GalleryCardDelegate(QStyledItemDelegate):
 
     def editorEvent(self, event, model, option, index):
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-            row = index.row()
-            h_val = self.parent_view.get_hover_progress(row) if hasattr(self.parent_view, "get_hover_progress") else 0.0
+            is_hover = bool(option.state & QStyle.State_MouseOver)
+            lift_y = -2 if is_hover else 0
             rect = option.rect.adjusted(6, 6, -6, -6)
-            lift_y = int(-3.0 * h_val)
             card_rect = rect.translated(0, lift_y)
             
             pos = event.pos()
@@ -1754,81 +1664,46 @@ class GalleryCardDelegate(QStyledItemDelegate):
             painter.restore()
             return
 
-        model = index.model()
-        row = index.row()
-        h_val = self.parent_view.get_hover_progress(row) if hasattr(self.parent_view, "get_hover_progress") else 0.0
-
-        # --- 动效 5: 瀑布流级联微淡入 (Staggered Fade-in) ---
-        item_alpha = 1.0
-        if hasattr(model, "refresh_time"):
-            elapsed = time.time() - model.refresh_time
-            stagger_delay = min(row * 0.008, 0.140)
-            t = elapsed - stagger_delay
-            if t < 0.140:
-                item_alpha = max(0.0, min(1.0, t / 0.140))
-                QTimer.singleShot(16, self.parent_view.viewport().update)
-        
-        painter.setOpacity(item_alpha)
-
-        # 基础卡片矩形与 Hover 微抬升 (向上平滑浮动 3.0px)
-        rect = option.rect.adjusted(6, 6, -6, -6)
-        lift_y = int(-3.0 * h_val)
-        card_rect = rect.translated(0, lift_y)
-
+        is_hover = bool(option.state & QStyle.State_MouseOver)
         is_dark = (self.parent_view.window().current_theme == "dark") if hasattr(self.parent_view, "window") else True
 
-        # --- 动效 1: 柔和扩散阴影 (Hover Soft Shadow) ---
-        if h_val > 0.02:
-            shadow_rect = card_rect.adjusted(-2, 3, 2, 6)
+        # 原生悬浮微抬升 2px
+        rect = option.rect.adjusted(6, 6, -6, -6)
+        lift_y = -2 if is_hover else 0
+        card_rect = rect.translated(0, lift_y)
+
+        # 悬浮微阴影
+        if is_hover:
+            shadow_rect = card_rect.adjusted(-1, 2, 1, 4)
             shadow_path = QPainterPath()
-            shadow_path.addRoundedRect(QRectF(shadow_rect), 10, 10)
-            painter.fillPath(shadow_path, QColor(0, 0, 0, int(50 * h_val)))
+            shadow_path.addRoundedRect(QRectF(shadow_rect), 8, 8)
+            painter.fillPath(shadow_path, QColor(0, 0, 0, 45))
 
         # 卡片背景
         card_bg = QColor("#282A31") if is_dark else QColor("#FFFFFF")
-        
-        # 边框发光颜色平滑插值 (base_border -> #3B82F6)
-        base_border = QColor("#383B44") if is_dark else QColor("#E2E8F0")
-        target_border = QColor("#3B82F6")
-        r_b = int(base_border.red() + (target_border.red() - base_border.red()) * h_val)
-        g_b = int(base_border.green() + (target_border.green() - base_border.green()) * h_val)
-        b_b = int(base_border.blue() + (target_border.blue() - base_border.blue()) * h_val)
-        border_color = QColor(r_b, g_b, b_b)
+        border_color = QColor("#3B82F6") if is_hover else (QColor("#383B44") if is_dark else QColor("#E2E8F0"))
 
         path = QPainterPath()
         path.addRoundedRect(QRectF(card_rect), 8, 8)
         painter.fillPath(path, card_bg)
-        painter.setPen(QPen(border_color, 1.0 + 0.8 * h_val))
+        painter.setPen(QPen(border_color, 1.5 if is_hover else 1.0))
         painter.drawPath(path)
 
-        # 缩略图视口
+        # 缩略图区域
         thumb_rect = QRect(card_rect.left() + 6, card_rect.top() + 6, card_rect.width() - 12, card_rect.width() - 12)
         thumb_path_shape = QPainterPath()
         thumb_path_shape.addRoundedRect(QRectF(thumb_rect), 6, 6)
         painter.fillPath(thumb_path_shape, QColor("#141518") if is_dark else QColor("#F8FAFC"))
 
         img_path = proj.get("thumbnail")
+        model = index.model()
         pix = model.pixmap_cache.get(img_path) if img_path else None
 
         if pix and not pix.isNull():
-            # --- 动效 2: 缩略图 150ms 电影级 Alpha 淡入 (Smooth Cross-Fade) ---
-            fade_start = getattr(model, "fade_start_times", {}).get(img_path, 0)
-            if fade_start > 0:
-                img_elapsed = time.time() - fade_start
-                if img_elapsed < 0.150:
-                    img_alpha = max(0.0, min(1.0, img_elapsed / 0.150))
-                    painter.setOpacity(item_alpha * img_alpha)
-                    QTimer.singleShot(16, self.parent_view.viewport().update)
-                else:
-                    painter.setOpacity(item_alpha)
-            else:
-                painter.setOpacity(item_alpha)
-
             scaled = pix.scaled(thumb_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             x_off = thumb_rect.left() + (thumb_rect.width() - scaled.width()) // 2
             y_off = thumb_rect.top() + (thumb_rect.height() - scaled.height()) // 2
             painter.drawPixmap(x_off, y_off, scaled)
-            painter.setOpacity(item_alpha)
         else:
             painter.setPen(QColor("#6B7280"))
             painter.drawText(thumb_rect, Qt.AlignCenter, "📦 待渲染工程")
@@ -1935,76 +1810,21 @@ class GalleryCardDelegate(QStyledItemDelegate):
     def on_image_loaded(self, img_path, pixmap):
         model = self.parent_view.model()
         model.pixmap_cache[img_path] = pixmap
-        model.fade_start_times[img_path] = time.time()
         model.loading_set.discard(img_path)
         self.parent_view.viewport().update()
 
-# ----------------- 丝滑阻尼平滑滚动与微动效视图 -----------------
+# ----------------- 丝滑阻尼平滑像素级滚动视图 -----------------
 class SmoothGalleryView(QListView):
     """
-    丝滑阻尼平滑像素级滚动与 Hover 微交互视图：
-    1. 彻底解决原生 QListView 鼠标滚轮跳跃过大的问题，实现跟手像素滚动；
-    2. 维护每个卡片的 60 FPS 阻尼 Hover 插值与微抬升动画。
+    丝滑阻尼平滑像素级滚动视图：
+    彻底解决原生 QListView (IconMode) 鼠标滚轮跳跃幅度过大的问题，
+    实现细腻、平滑、跟手的像素级滚动，纯原生驱动，零死循环风险。
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setVerticalScrollMode(QListView.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.verticalScrollBar().setSingleStep(32)
-        self.setMouseTracking(True)
-        
-        self._hovered_row = -1
-        self._hover_values = {}
-        
-        self._hover_timer = QTimer(self)
-        self._hover_timer.setInterval(16)  # ~60 FPS
-        self._hover_timer.timeout.connect(self._update_hover_animations)
-
-    def get_hover_progress(self, row):
-        return self._hover_values.get(row, 0.0)
-
-    def mouseMoveEvent(self, event):
-        idx = self.indexAt(event.pos())
-        new_row = idx.row() if idx.isValid() else -1
-        if new_row != self._hovered_row:
-            self._hovered_row = new_row
-            if not self._hover_timer.isActive():
-                self._hover_timer.start()
-        super().mouseMoveEvent(event)
-
-    def leaveEvent(self, event):
-        if self._hovered_row != -1:
-            self._hovered_row = -1
-            if not self._hover_timer.isActive():
-                self._hover_timer.start()
-        super().leaveEvent(event)
-
-    def _update_hover_animations(self):
-        needs_repaint = False
-        all_settled = True
-        rows_to_check = set(self._hover_values.keys())
-        if self._hovered_row >= 0:
-            rows_to_check.add(self._hovered_row)
-            
-        for r in list(rows_to_check):
-            target = 1.0 if r == self._hovered_row else 0.0
-            current = self._hover_values.get(r, 0.0)
-            diff = target - current
-            if abs(diff) > 0.01:
-                # 阻尼插值 (每帧前移 28%)
-                new_val = current + diff * 0.28
-                self._hover_values[r] = new_val
-                needs_repaint = True
-                all_settled = False
-            else:
-                self._hover_values[r] = target
-                if target == 0.0 and r in self._hover_values:
-                    del self._hover_values[r]
-                    
-        if needs_repaint:
-            self.viewport().update()
-        elif all_settled and self._hovered_row == -1:
-            self._hover_timer.stop()
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
