@@ -43,7 +43,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 from PySide6.QtCore import (
     Qt, QSize, QRect, QRectF, QPoint, QPointF, QModelIndex, QAbstractListModel,
-    QThreadPool, QRunnable, Signal, QObject, Slot, QTimer, QEvent,
+    QThreadPool, QRunnable, QThread, Signal, QObject, Slot, QTimer, QEvent,
     QVariantAnimation, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QSequentialAnimationGroup
 )
 from PySide6.QtGui import (
@@ -1289,11 +1289,11 @@ class ImageLoadSignal(QObject):
     failed = Signal(str)
 
 class ImageLoadTask(QRunnable):
-    def __init__(self, img_path, target_size=(220, 220)):
+    def __init__(self, img_path, signals, target_size=(220, 220)):
         super().__init__()
         self.img_path = img_path
         self.target_size = target_size
-        self.signals = ImageLoadSignal()
+        self.signals = signals
 
     def run(self):
         try:
@@ -1310,19 +1310,17 @@ class ImageLoadTask(QRunnable):
             except Exception:
                 pass
 
-# ----------------- 异步全量数据加载 Worker (Qt 信号槽) -----------------
-class DataLoaderSignals(QObject):
-    finished = Signal(list, list, list)
+# ----------------- 异步全量数据加载 Thread (Qt 线程) -----------------
+class DataLoaderThread(QThread):
+    finished_data = Signal(list, list, list)
 
-class DataLoaderWorker(QRunnable):
-    def __init__(self, excel_path, workspaces_v2, meta_cache, brand_aliases=None, ignored_brands=None):
-        super().__init__()
+    def __init__(self, excel_path, workspaces_v2, meta_cache, brand_aliases=None, ignored_brands=None, parent=None):
+        super().__init__(parent)
         self.excel_path = excel_path
         self.workspaces_v2 = workspaces_v2 if isinstance(workspaces_v2, list) else [{"path": workspaces_v2, "alias": "主力生产盘", "is_primary": True}]
         self.meta_cache = meta_cache
         self.brand_aliases = brand_aliases
         self.ignored_brands = ignored_brands
-        self.signals = DataLoaderSignals()
 
     def run(self):
         try:
@@ -1342,9 +1340,9 @@ class DataLoaderWorker(QRunnable):
                     disk_p.extend(sub_projs)
             disk_p.sort(key=lambda x: x["mtime"], reverse=True)
             merged = merge_excel_and_disk_projects(excel_p, disk_p)
-            self.signals.finished.emit(excel_p, disk_p, merged)
+            self.finished_data.emit(excel_p, disk_p, merged)
         except Exception:
-            self.signals.finished.emit([], [], [])
+            self.finished_data.emit([], [], [])
 
 # ----------------- 萌猫开屏等待窗口 (Cat Splash Screen) -----------------
 class CatSplashScreen(QWidget):
@@ -1664,6 +1662,9 @@ class GalleryCardDelegate(QStyledItemDelegate):
         self.parent_view = parent
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(4)
+        self.image_signals = ImageLoadSignal(self)
+        self.image_signals.finished.connect(self.on_image_loaded)
+        self.image_signals.failed.connect(self.on_image_failed)
 
     def sizeHint(self, option, index):
         return QSize(220, 280)
@@ -1758,9 +1759,7 @@ class GalleryCardDelegate(QStyledItemDelegate):
             
             if img_path and img_path not in model.loading_set and os.path.exists(img_path) and is_valid_beauty_thumbnail(img_path):
                 model.loading_set.add(img_path)
-                task = ImageLoadTask(img_path)
-                task.signals.finished.connect(self.on_image_loaded)
-                task.signals.failed.connect(self.on_image_failed)
+                task = ImageLoadTask(img_path, self.image_signals)
                 self.thread_pool.start(task)
 
         # 缩略图右下角浮动工作盘角标 (如 E:主力, D:归档)
@@ -3862,6 +3861,7 @@ class MainWindow(QMainWindow):
             self.show_main_window()
 
     def show_main_window(self):
+        self.show()
         self.showNormal()
         self.activateWindow()
         self.raise_()
@@ -4418,9 +4418,9 @@ class MainWindow(QMainWindow):
         self.sync_status_lbl.setText("正在载入资产...")
         ex_path = self.cfg.get("excel_path", DEFAULT_EXCEL_PATH)
         
-        worker = DataLoaderWorker(ex_path, self.workspaces_v2, self.meta_cache, self.brand_aliases, self.ignored_brands)
-        worker.signals.finished.connect(self.on_data_loaded)
-        QThreadPool.globalInstance().start(worker)
+        self.loader_thread = DataLoaderThread(ex_path, self.workspaces_v2, self.meta_cache, self.brand_aliases, self.ignored_brands, parent=self)
+        self.loader_thread.finished_data.connect(self.on_data_loaded)
+        self.loader_thread.start()
 
     @Slot(list, list, list)
     def on_data_loaded(self, excel_p, disk_p, merged):
@@ -5327,46 +5327,27 @@ def main():
             splash.show()
             app.processEvents()
 
-    # 最少 2000ms + 数据完全加载，二者同时满足才关闭 Splash
-    _timer_done = [False]
-    _data_done  = [False]
-    _window     = [None]
+    # 立即实例化主窗口（耗时仅 10ms，绝不卡死主线程）
+    initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
+    win = MainWindow(initial_files=initial_files)
 
+    _shown = [False]
     def do_show_main():
-        """关闭 Splash 并显示主窗口"""
-        if not (_timer_done[0] and _data_done[0]):
+        if _shown[0]:
             return
-
-        # 1. 关闭 C 语言原生 Splash（如果存在）
+        _shown[0] = True
         if pyi_splash is not None:
             try:
                 pyi_splash.close()
             except Exception:
                 pass
-
-        # 2. 关闭 Qt 原生 Splash（如果存在）
         if splash:
-            splash.close()
-
-        # 3. 展示主窗口
-        win = _window[0]
-        if win:
-            win.show()
-            set_dark_titlebar(int(win.winId()), win.current_theme == "dark")
-
-    def on_timer_done():
-        _timer_done[0] = True
-        do_show_main()
-
-    def on_data_ready():
-        _data_done[0] = True
-        do_show_main()
-
-    def create_main_window():
-        initial_files = sys.argv[1:] if len(sys.argv) > 1 else None
-        win = MainWindow(initial_files=initial_files)
-        _window[0] = win
-        win.initial_load_done.connect(on_data_ready)
+            try:
+                splash.close()
+            except Exception:
+                pass
+        win.show_main_window()
+        set_dark_titlebar(int(win.winId()), win.current_theme == "dark")
 
     # 监听后续新启动实例的唤醒请求
     def on_ipc_wakeup_connection():
@@ -5377,32 +5358,23 @@ def main():
                     raw = client.readAll().data()
                     data = json.loads(raw.decode("utf-8"))
                     files = data.get("files", [])
-                    win = _window[0]
-                    if files and win and hasattr(win, "add_files_to_organizer"):
+                    if files and hasattr(win, "add_files_to_organizer"):
                         win.tabs.setCurrentIndex(1)
                         win.add_files_to_organizer(files)
                 except Exception:
                     pass
             client.disconnectFromServer()
-            
-            win = _window[0]
-            if win:
-                win.show_main_window()
+        do_show_main()
+        win.show_main_window()
 
     ipc_server.newConnection.connect(on_ipc_wakeup_connection)
 
-    # 预留加载平滑过渡
-    QTimer.singleShot(2000, on_timer_done)
-
-    # 延迟 50ms 创建主窗口
-    QTimer.singleShot(50, create_main_window)
-
-    # 超时兜底：6 秒后强制显示主窗口
-    def force_show():
-        _timer_done[0] = True
-        _data_done[0]  = True
+    # 优雅过渡：如果有开屏画面，在数据就绪时或最多 1000ms 后展示主窗口；若无则立即 0.05s 展示
+    if has_native_splash or splash:
+        win.initial_load_done.connect(do_show_main)
+        QTimer.singleShot(1000, do_show_main)
+    else:
         do_show_main()
-    QTimer.singleShot(6000, force_show)
 
     sys.exit(app.exec())
 
