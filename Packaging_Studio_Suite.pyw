@@ -22,6 +22,7 @@ import hashlib
 import zipfile
 import tempfile
 import datetime
+import time
 import threading
 import webbrowser
 import subprocess
@@ -40,8 +41,9 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
 from PySide6.QtCore import (
-    Qt, QSize, QRect, QRectF, QPoint, QModelIndex, QAbstractListModel,
-    QThreadPool, QRunnable, Signal, QObject, Slot, QTimer, QEvent
+    Qt, QSize, QRect, QRectF, QPoint, QPointF, QModelIndex, QAbstractListModel,
+    QThreadPool, QRunnable, Signal, QObject, Slot, QTimer, QEvent,
+    QVariantAnimation, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QSequentialAnimationGroup
 )
 from PySide6.QtGui import (
     QIcon, QPixmap, QImage, QPainter, QColor, QFont, QPen, QBrush,
@@ -54,7 +56,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QDialog, QTableWidget, QTableWidgetItem, QCheckBox,
     QHeaderView, QSplitter, QGroupBox, QTextEdit, QPlainTextEdit, QFrame,
     QProgressBar, QSplashScreen, QToolButton, QProgressDialog, QSystemTrayIcon,
-    QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
 )
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
@@ -110,6 +112,114 @@ def set_dark_titlebar(hwnd, dark=True):
                     ctypes.byref(val),
                     ctypes.sizeof(val)
                 )
+        except Exception:
+            pass
+
+# ----------------- 高级动效组件体系 (Micro-Interactions Suite) -----------------
+class AnimatedPushButton(QPushButton):
+    """
+    带有微触感弹性回弹 (0.95x Scale Spring) 与柔和悬浮高光的现代按钮组件
+    """
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._scale = 1.0
+        self._hover_val = 0.0
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # 缩放阻尼动画
+        self._anim_scale = QVariantAnimation(self)
+        self._anim_scale.setDuration(120)
+        self._anim_scale.valueChanged.connect(self._on_scale_changed)
+        
+        # 悬浮高光动画
+        self._anim_hover = QVariantAnimation(self)
+        self._anim_hover.setDuration(140)
+        self._anim_hover.valueChanged.connect(self._on_hover_changed)
+
+    def _on_scale_changed(self, val):
+        self._scale = float(val)
+        self.update()
+
+    def _on_hover_changed(self, val):
+        self._hover_val = float(val)
+        self.update()
+
+    def enterEvent(self, event):
+        self._anim_hover.stop()
+        self._anim_hover.setStartValue(self._hover_val)
+        self._anim_hover.setEndValue(1.0)
+        self._anim_hover.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim_hover.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._anim_hover.stop()
+        self._anim_hover.setStartValue(self._hover_val)
+        self._anim_hover.setEndValue(0.0)
+        self._anim_hover.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim_hover.start()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._anim_scale.stop()
+            self._anim_scale.setStartValue(self._scale)
+            self._anim_scale.setEndValue(0.95)
+            self._anim_scale.setEasingCurve(QEasingCurve.OutQuad)
+            self._anim_scale.start()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._anim_scale.stop()
+            self._anim_scale.setStartValue(self._scale)
+            self._anim_scale.setEndValue(1.0)
+            self._anim_scale.setEasingCurve(QEasingCurve.OutBack)
+            self._anim_scale.start()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        if abs(self._scale - 1.0) < 0.001 and self._hover_val < 0.001:
+            super().paintEvent(event)
+            return
+            
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        
+        # 居中缩放
+        w, h = self.width(), self.height()
+        cx, cy = w / 2.0, h / 2.0
+        painter.translate(cx, cy)
+        painter.scale(self._scale, self._scale)
+        painter.translate(-cx, -cy)
+        
+        super().paintEvent(event)
+        
+        if self._hover_val > 0.01 and self.isEnabled():
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255, int(16 * self._hover_val)))
+            painter.drawRoundedRect(QRectF(0, 0, w, h), 4, 4)
+        painter.end()
+
+class AnimatedDialog(QDialog):
+    """
+    带有平滑淡入透明度与弹性阻尼 (160ms Ease-Out) 的优雅模态对话框基类
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._anim_opacity = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_dark_titlebar(int(self.winId()), True)
+        try:
+            self._anim_opacity = QPropertyAnimation(self, b"windowOpacity", self)
+            self._anim_opacity.setDuration(160)
+            self._anim_opacity.setStartValue(0.0)
+            self._anim_opacity.setEndValue(1.0)
+            self._anim_opacity.setEasingCurve(QEasingCurve.OutCubic)
+            self._anim_opacity.start()
         except Exception:
             pass
 
@@ -1346,7 +1456,7 @@ class CatSplashScreen(QWidget):
         self.status_lbl.setText(text)
 
 # ----------------- 🏢 客户与品牌库管理器弹窗 -----------------
-class BrandManagerDialog(QDialog):
+class BrandManagerDialog(AnimatedDialog):
     def __init__(self, curated_brands, ignored_brands, brand_aliases, detected_raw_dirs, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🏢 客户与品牌库管理控制台")
@@ -1567,7 +1677,9 @@ class GalleryModel(QAbstractListModel):
         super().__init__(parent)
         self.projects = []
         self.pixmap_cache = {}
+        self.fade_start_times = {}
         self.loading_set = set()
+        self.refresh_time = time.time()
 
     def rowCount(self, parent=QModelIndex()):
         return len(self.projects)
@@ -1583,6 +1695,7 @@ class GalleryModel(QAbstractListModel):
     def set_projects(self, projects):
         self.beginResetModel()
         self.projects = projects
+        self.refresh_time = time.time()
         self.endResetModel()
 
     def get_project(self, row):
@@ -1590,7 +1703,7 @@ class GalleryModel(QAbstractListModel):
             return self.projects[row]
         return None
 
-# ----------------- 卡片 Delegate (支持点击命中测试) -----------------
+# ----------------- 卡片 Delegate (支持点击命中测试与动效) -----------------
 class GalleryCardDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1603,14 +1716,19 @@ class GalleryCardDelegate(QStyledItemDelegate):
 
     def editorEvent(self, event, model, option, index):
         if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            row = index.row()
+            h_val = self.parent_view.get_hover_progress(row) if hasattr(self.parent_view, "get_hover_progress") else 0.0
             rect = option.rect.adjusted(6, 6, -6, -6)
+            lift_y = int(-3.0 * h_val)
+            card_rect = rect.translated(0, lift_y)
+            
             pos = event.pos()
-            thumb_rect = QRect(rect.left() + 6, rect.top() + 6, rect.width() - 12, rect.width() - 12)
+            thumb_rect = QRect(card_rect.left() + 6, card_rect.top() + 6, card_rect.width() - 12, card_rect.width() - 12)
             badge_y = thumb_rect.bottom() + 10
             title_y = badge_y + 26
             action_y = title_y + 24
-            btn1_rect = QRect(rect.left() + 10, action_y, (rect.width() - 26) // 2, 22)
-            btn2_rect = QRect(btn1_rect.right() + 6, action_y, (rect.width() - 26) // 2, 22)
+            btn1_rect = QRect(card_rect.left() + 10, action_y, (card_rect.width() - 26) // 2, 22)
+            btn2_rect = QRect(btn1_rect.right() + 6, action_y, (card_rect.width() - 26) // 2, 22)
             
             proj = index.data(Qt.UserRole)
             if proj:
@@ -1631,38 +1749,86 @@ class GalleryCardDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-        rect = option.rect.adjusted(6, 6, -6, -6)
         proj = index.data(Qt.UserRole)
         if not proj:
             painter.restore()
             return
 
-        is_hover = (option.state & QStyle.State_MouseOver)
+        model = index.model()
+        row = index.row()
+        h_val = self.parent_view.get_hover_progress(row) if hasattr(self.parent_view, "get_hover_progress") else 0.0
+
+        # --- 动效 5: 瀑布流级联微淡入 (Staggered Fade-in) ---
+        item_alpha = 1.0
+        if hasattr(model, "refresh_time"):
+            elapsed = time.time() - model.refresh_time
+            stagger_delay = min(row * 0.008, 0.140)
+            t = elapsed - stagger_delay
+            if t < 0.140:
+                item_alpha = max(0.0, min(1.0, t / 0.140))
+                QTimer.singleShot(16, self.parent_view.viewport().update)
+        
+        painter.setOpacity(item_alpha)
+
+        # 基础卡片矩形与 Hover 微抬升 (向上平滑浮动 3.0px)
+        rect = option.rect.adjusted(6, 6, -6, -6)
+        lift_y = int(-3.0 * h_val)
+        card_rect = rect.translated(0, lift_y)
+
         is_dark = (self.parent_view.window().current_theme == "dark") if hasattr(self.parent_view, "window") else True
 
+        # --- 动效 1: 柔和扩散阴影 (Hover Soft Shadow) ---
+        if h_val > 0.02:
+            shadow_rect = card_rect.adjusted(-2, 3, 2, 6)
+            shadow_path = QPainterPath()
+            shadow_path.addRoundedRect(QRectF(shadow_rect), 10, 10)
+            painter.fillPath(shadow_path, QColor(0, 0, 0, int(50 * h_val)))
+
+        # 卡片背景
         card_bg = QColor("#282A31") if is_dark else QColor("#FFFFFF")
-        border_color = QColor("#3B82F6") if is_hover else (QColor("#383B44") if is_dark else QColor("#E2E8F0"))
         
+        # 边框发光颜色平滑插值 (base_border -> #3B82F6)
+        base_border = QColor("#383B44") if is_dark else QColor("#E2E8F0")
+        target_border = QColor("#3B82F6")
+        r_b = int(base_border.red() + (target_border.red() - base_border.red()) * h_val)
+        g_b = int(base_border.green() + (target_border.green() - base_border.green()) * h_val)
+        b_b = int(base_border.blue() + (target_border.blue() - base_border.blue()) * h_val)
+        border_color = QColor(r_b, g_b, b_b)
+
         path = QPainterPath()
-        path.addRoundedRect(QRectF(rect), 8, 8)
+        path.addRoundedRect(QRectF(card_rect), 8, 8)
         painter.fillPath(path, card_bg)
-        painter.setPen(QPen(border_color, 1.5 if is_hover else 1))
+        painter.setPen(QPen(border_color, 1.0 + 0.8 * h_val))
         painter.drawPath(path)
 
-        thumb_rect = QRect(rect.left() + 6, rect.top() + 6, rect.width() - 12, rect.width() - 12)
+        # 缩略图视口
+        thumb_rect = QRect(card_rect.left() + 6, card_rect.top() + 6, card_rect.width() - 12, card_rect.width() - 12)
         thumb_path_shape = QPainterPath()
         thumb_path_shape.addRoundedRect(QRectF(thumb_rect), 6, 6)
         painter.fillPath(thumb_path_shape, QColor("#141518") if is_dark else QColor("#F8FAFC"))
 
         img_path = proj.get("thumbnail")
-        model = index.model()
         pix = model.pixmap_cache.get(img_path) if img_path else None
 
         if pix and not pix.isNull():
+            # --- 动效 2: 缩略图 150ms 电影级 Alpha 淡入 (Smooth Cross-Fade) ---
+            fade_start = getattr(model, "fade_start_times", {}).get(img_path, 0)
+            if fade_start > 0:
+                img_elapsed = time.time() - fade_start
+                if img_elapsed < 0.150:
+                    img_alpha = max(0.0, min(1.0, img_elapsed / 0.150))
+                    painter.setOpacity(item_alpha * img_alpha)
+                    QTimer.singleShot(16, self.parent_view.viewport().update)
+                else:
+                    painter.setOpacity(item_alpha)
+            else:
+                painter.setOpacity(item_alpha)
+
             scaled = pix.scaled(thumb_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             x_off = thumb_rect.left() + (thumb_rect.width() - scaled.width()) // 2
             y_off = thumb_rect.top() + (thumb_rect.height() - scaled.height()) // 2
             painter.drawPixmap(x_off, y_off, scaled)
+            painter.setOpacity(item_alpha)
         else:
             painter.setPen(QColor("#6B7280"))
             painter.drawText(thumb_rect, Qt.AlignCenter, "📦 待渲染工程")
@@ -1703,7 +1869,7 @@ class GalleryCardDelegate(QStyledItemDelegate):
         badge_bg, badge_fg = cat_colors.get(cat_val, cat_colors["包装"])
 
         badge_y = thumb_rect.bottom() + 10
-        badge_rect = QRect(rect.left() + 10, badge_y, 42, 18)
+        badge_rect = QRect(card_rect.left() + 10, badge_y, 42, 18)
         badge_path = QPainterPath()
         badge_path.addRoundedRect(QRectF(badge_rect), 4, 4)
         painter.fillPath(badge_path, badge_bg)
@@ -1728,11 +1894,11 @@ class GalleryCardDelegate(QStyledItemDelegate):
             font_time = QFont(painter.font())
             font_time.setPointSize(8)
             painter.setFont(font_time)
-            time_rect = QRect(badge_rect.right() + 6, badge_y, rect.right() - badge_rect.right() - 16, 18)
+            time_rect = QRect(badge_rect.right() + 6, badge_y, card_rect.right() - badge_rect.right() - 16, 18)
             painter.drawText(time_rect, Qt.AlignRight | Qt.AlignVCenter, f"⏱️ {time_str}")
 
         title_y = badge_y + 26
-        title_rect = QRect(rect.left() + 10, title_y, rect.width() - 20, 22)
+        title_rect = QRect(card_rect.left() + 10, title_y, card_rect.width() - 20, 22)
         painter.setPen(QColor("#F1F3F5") if is_dark else QColor("#0F172A"))
         font_title = QFont(painter.font())
         font_title.setPointSize(10)
@@ -1744,8 +1910,8 @@ class GalleryCardDelegate(QStyledItemDelegate):
         painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_title)
 
         action_y = title_y + 24
-        btn1_rect = QRect(rect.left() + 10, action_y, (rect.width() - 26) // 2, 22)
-        btn2_rect = QRect(btn1_rect.right() + 6, action_y, (rect.width() - 26) // 2, 22)
+        btn1_rect = QRect(card_rect.left() + 10, action_y, (card_rect.width() - 26) // 2, 22)
+        btn2_rect = QRect(btn1_rect.right() + 6, action_y, (card_rect.width() - 26) // 2, 22)
         
         b1_path = QPainterPath()
         b1_path.addRoundedRect(QRectF(btn1_rect), 4, 4)
@@ -1769,21 +1935,76 @@ class GalleryCardDelegate(QStyledItemDelegate):
     def on_image_loaded(self, img_path, pixmap):
         model = self.parent_view.model()
         model.pixmap_cache[img_path] = pixmap
+        model.fade_start_times[img_path] = time.time()
         model.loading_set.discard(img_path)
         self.parent_view.viewport().update()
 
-# ----------------- 丝滑阻尼平滑滚动视图 -----------------
+# ----------------- 丝滑阻尼平滑滚动与微动效视图 -----------------
 class SmoothGalleryView(QListView):
     """
-    丝滑阻尼平滑像素级滚动视图：
-    彻底解决原生 QListView (IconMode) 鼠标滚轮跳跃幅度过大的问题，
-    实现细腻、平滑、跟手的像素级滚动。
+    丝滑阻尼平滑像素级滚动与 Hover 微交互视图：
+    1. 彻底解决原生 QListView 鼠标滚轮跳跃过大的问题，实现跟手像素滚动；
+    2. 维护每个卡片的 60 FPS 阻尼 Hover 插值与微抬升动画。
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setVerticalScrollMode(QListView.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.verticalScrollBar().setSingleStep(32)
+        self.setMouseTracking(True)
+        
+        self._hovered_row = -1
+        self._hover_values = {}
+        
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(16)  # ~60 FPS
+        self._hover_timer.timeout.connect(self._update_hover_animations)
+
+    def get_hover_progress(self, row):
+        return self._hover_values.get(row, 0.0)
+
+    def mouseMoveEvent(self, event):
+        idx = self.indexAt(event.pos())
+        new_row = idx.row() if idx.isValid() else -1
+        if new_row != self._hovered_row:
+            self._hovered_row = new_row
+            if not self._hover_timer.isActive():
+                self._hover_timer.start()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hovered_row != -1:
+            self._hovered_row = -1
+            if not self._hover_timer.isActive():
+                self._hover_timer.start()
+        super().leaveEvent(event)
+
+    def _update_hover_animations(self):
+        needs_repaint = False
+        all_settled = True
+        rows_to_check = set(self._hover_values.keys())
+        if self._hovered_row >= 0:
+            rows_to_check.add(self._hovered_row)
+            
+        for r in list(rows_to_check):
+            target = 1.0 if r == self._hovered_row else 0.0
+            current = self._hover_values.get(r, 0.0)
+            diff = target - current
+            if abs(diff) > 0.01:
+                # 阻尼插值 (每帧前移 28%)
+                new_val = current + diff * 0.28
+                self._hover_values[r] = new_val
+                needs_repaint = True
+                all_settled = False
+            else:
+                self._hover_values[r] = target
+                if target == 0.0 and r in self._hover_values:
+                    del self._hover_values[r]
+                    
+        if needs_repaint:
+            self.viewport().update()
+        elif all_settled and self._hovered_row == -1:
+            self._hover_timer.stop()
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
@@ -2092,7 +2313,7 @@ class ExcelFullFillWorker(QRunnable):
             self.signals.finished.emit(False, {}, f"同步异常: {str(e)}")
 
 # ----------------- 资产自动填充 Excel 对话框 -----------------
-class ExcelFillDialog(QDialog):
+class ExcelFillDialog(AnimatedDialog):
     """资产自动填充与同步到 Excel 对话框"""
     def __init__(self, excel_path, all_projects, filtered_projects, parent=None):
         super().__init__(parent)
@@ -2326,7 +2547,7 @@ class WeeklyReportProgressBarDelegate(QStyledItemDelegate):
         painter.drawText(option.rect, Qt.AlignCenter, f"{progress}%")
         painter.restore()
 
-class WeeklyReportDialog(QDialog):
+class WeeklyReportDialog(AnimatedDialog):
     """自动化工作汇报 (周报) 生成与导出对话框"""
     def __init__(self, workspaces_v2, parent=None):
         super().__init__(parent)
@@ -2340,10 +2561,6 @@ class WeeklyReportDialog(QDialog):
         self.build_ui()
         self.load_week_data()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_dark_titlebar(int(self.winId()), True)
-
     def build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -2351,30 +2568,30 @@ class WeeklyReportDialog(QDialog):
 
         # 顶部自然周切换控制栏
         top_ctrl = QHBoxLayout()
-        self.btn_prev = QPushButton("◀ 上一周")
+        self.btn_prev = AnimatedPushButton("◀ 上一周")
         self.btn_prev.clicked.connect(self.go_prev_week)
         
         self.lbl_week = QLabel()
         self.lbl_week.setStyleSheet("font-size: 14px; font-weight: bold; color: #38BDF8; padding: 0 8px;")
         
-        self.btn_next = QPushButton("下一周 ▶")
+        self.btn_next = AnimatedPushButton("下一周 ▶")
         self.btn_next.clicked.connect(self.go_next_week)
         
-        self.btn_this_week = QPushButton("本周")
+        self.btn_this_week = AnimatedPushButton("本周")
         self.btn_this_week.clicked.connect(self.go_this_week)
 
         self.lbl_summary = QLabel()
         self.lbl_summary.setStyleSheet("color: #9BA1B0; font-size: 12px; margin-left: 12px;")
 
-        btn_select_all = QPushButton("☑ 全选")
+        btn_select_all = AnimatedPushButton("☑ 全选")
         btn_select_all.setToolTip("勾选全部工作项")
         btn_select_all.clicked.connect(lambda: self.set_all_selection(True))
 
-        btn_unselect_all = QPushButton("☐ 全不选")
+        btn_unselect_all = AnimatedPushButton("☐ 全不选")
         btn_unselect_all.setToolTip("取消勾选全部工作项")
         btn_unselect_all.clicked.connect(lambda: self.set_all_selection(False))
 
-        btn_invert = QPushButton("🔀 反选")
+        btn_invert = AnimatedPushButton("🔀 反选")
         btn_invert.setToolTip("反转当前的勾选状态")
         btn_invert.clicked.connect(self.invert_selection)
 
@@ -2429,24 +2646,24 @@ class WeeklyReportDialog(QDialog):
         # 底部操作按钮栏
         bottom_bar = QHBoxLayout()
         
-        btn_add = QPushButton("➕ 添加一行")
+        btn_add = AnimatedPushButton("➕ 添加一行")
         btn_add.clicked.connect(self.add_manual_row)
         
-        btn_del = QPushButton("🗑️ 移除选中行")
+        btn_del = AnimatedPushButton("🗑️ 移除选中行")
         btn_del.clicked.connect(self.delete_selected_row)
         
-        btn_copy = QPushButton("📋 复制表格数据")
+        btn_copy = AnimatedPushButton("📋 复制表格数据")
         btn_copy.setObjectName("PrimaryBtn")
         btn_copy.setToolTip("复制为 TSV 数据，在 Excel 中直接 Ctrl+V 即可粘贴整齐表格")
         btn_copy.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 8px 16px;")
         btn_copy.clicked.connect(self.copy_tsv_to_clipboard)
 
-        btn_export = QPushButton("📊 导出为工作汇报.xlsx")
+        btn_export = AnimatedPushButton("📊 导出为工作汇报.xlsx")
         btn_export.setObjectName("PrimaryBtn")
         btn_export.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 8px 16px;")
         btn_export.clicked.connect(self.export_to_excel)
 
-        btn_close = QPushButton("关闭")
+        btn_close = AnimatedPushButton("关闭")
         btn_close.clicked.connect(self.reject)
 
         bottom_bar.addWidget(btn_add)
@@ -2951,7 +3168,7 @@ class WeeklyReportDialog(QDialog):
             QMessageBox.critical(self, "导出失败", f"导出 Excel 发生异常:\n{str(e)}")
 
 # ----------------- 自定义文件夹规则管理弹窗 -----------------
-class FolderRuleManagerDialog(QDialog):
+class FolderRuleManagerDialog(AnimatedDialog):
     def __init__(self, rules, active_rule_id, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ 自定义文件夹归档规则管理器")
@@ -3126,7 +3343,7 @@ class FolderRuleManagerDialog(QDialog):
         self.accept()
 
 # ----------------- 工作盘空间管理中枢弹窗 -----------------
-class WorkspaceHubDialog(QDialog):
+class WorkspaceHubDialog(AnimatedDialog):
     """
     工作盘空间管理中枢：
     管理多个工作盘、修改别名、切换主力开工盘、查看硬盘容量与在线状态
@@ -3173,11 +3390,11 @@ class WorkspaceHubDialog(QDialog):
         self.refresh_table()
 
         btn_bar = QHBoxLayout()
-        btn_add = QPushButton("➕ 绑定新工作盘")
+        btn_add = AnimatedPushButton("➕ 绑定新工作盘")
         btn_add.clicked.connect(self.add_workspace)
-        btn_rename = QPushButton("✏️ 修改别名")
+        btn_rename = AnimatedPushButton("✏️ 修改别名")
         btn_rename.clicked.connect(self.rename_workspace)
-        btn_set_primary = QPushButton("⭐ 设为主力开工盘")
+        btn_set_primary = AnimatedPushButton("⭐ 设为主力开工盘")
         btn_set_primary.clicked.connect(self.set_primary_workspace)
         btn_del = QPushButton("🗑️ 移除工作盘")
         btn_del.clicked.connect(self.delete_workspace)
@@ -3302,7 +3519,7 @@ class WorkspaceHubDialog(QDialog):
         self.accept()
 
 # ----------------- 手动新建项目工程弹窗 -----------------
-class ManualProjectCreateDialog(QDialog):
+class ManualProjectCreateDialog(AnimatedDialog):
     """
     手动输入名称创建工程项目对话框：
     支持选择工作盘、输入/选择品牌、业务形态、输入SKU品名，自动生成工程目录与.blend并启动Blender
@@ -3322,10 +3539,6 @@ class ManualProjectCreateDialog(QDialog):
         self.active_rule_id = active_rule_id
         
         self.build_ui()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_dark_titlebar(int(self.winId()), True)
 
     def build_ui(self):
         layout = QVBoxLayout(self)
@@ -3420,11 +3633,11 @@ class ManualProjectCreateDialog(QDialog):
 
         # 底部按钮
         btn_bar = QHBoxLayout()
-        btn_create = QPushButton("创建项目")
+        btn_create = AnimatedPushButton("创建项目")
         btn_create.setObjectName("PrimaryBtn")
         btn_create.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 13px; padding: 8px 20px;")
         btn_create.clicked.connect(self.do_create_project)
-        btn_cancel = QPushButton("取消")
+        btn_cancel = AnimatedPushButton("取消")
         btn_cancel.clicked.connect(self.reject)
         
         btn_bar.addStretch()
@@ -3587,7 +3800,7 @@ class ManualProjectCreateDialog(QDialog):
         self.accept()
 
 # ----------------- 关闭窗口选项弹窗 -----------------
-class CloseActionDialog(QDialog):
+class CloseActionDialog(AnimatedDialog):
     """
     关闭窗口确认对话框：
     支持选择最小化到系统托盘或退出程序
@@ -3599,10 +3812,6 @@ class CloseActionDialog(QDialog):
         self.selected_action = "tray"
         self.remember = False
         self.build_ui()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        set_dark_titlebar(int(self.winId()), True)
 
     def build_ui(self):
         layout = QVBoxLayout(self)
@@ -3620,12 +3829,12 @@ class CloseActionDialog(QDialog):
         btn_box = QHBoxLayout()
         btn_box.setSpacing(12)
         
-        btn_tray = QPushButton("最小化到托盘")
+        btn_tray = AnimatedPushButton("最小化到托盘")
         btn_tray.setObjectName("PrimaryBtn")
         btn_tray.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; font-size: 12px; padding: 8px 14px;")
         btn_tray.clicked.connect(self.choose_tray)
 
-        btn_quit = QPushButton("退出程序")
+        btn_quit = AnimatedPushButton("退出程序")
         btn_quit.setStyleSheet("padding: 8px 14px; font-size: 12px;")
         btn_quit.clicked.connect(self.choose_quit)
 
@@ -3828,31 +4037,31 @@ class MainWindow(QMainWindow):
         self.sync_status_lbl = QLabel("🟢 就绪")
         self.sync_status_lbl.setStyleSheet("background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
         
-        btn_weekly_report = QPushButton("📝 工作汇报 (周报)")
+        btn_weekly_report = AnimatedPushButton("📝 工作汇报 (周报)")
         btn_weekly_report.setObjectName("PrimaryBtn")
         btn_weekly_report.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
         btn_weekly_report.setToolTip("自动统计本周新增与修改的项目成果，生成标准工作汇报表格")
         btn_weekly_report.clicked.connect(self.open_weekly_report_dialog)
 
-        btn_fill_excel = QPushButton("📊 填充资产到 Excel")
+        btn_fill_excel = AnimatedPushButton("📊 填充资产到 Excel")
         btn_fill_excel.setObjectName("PrimaryBtn")
         btn_fill_excel.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 12px; border-radius: 6px;")
         btn_fill_excel.setToolTip("对比磁盘资产与 Excel，自动补齐未录入的项目、分类及效果图")
         btn_fill_excel.clicked.connect(self.open_excel_fill_dialog)
 
-        btn_sync_excel = QPushButton("📤 更新 Excel 效果图")
+        btn_sync_excel = AnimatedPushButton("📤 更新 Excel 效果图")
         btn_sync_excel.setToolTip("将成片效果图写入 Excel 对应行")
         btn_sync_excel.clicked.connect(self.sync_all_thumbnails_to_excel)
 
-        btn_bind_excel = QPushButton("📁 绑定 Excel...")
+        btn_bind_excel = AnimatedPushButton("📁 绑定 Excel...")
         btn_bind_excel.clicked.connect(self.bind_excel_file)
-        btn_refresh = QPushButton("🔄 刷新")
+        btn_refresh = AnimatedPushButton("🔄 刷新")
         btn_refresh.clicked.connect(self.async_load_data)
-        btn_export = QPushButton("🌐 导出画廊")
+        btn_export = AnimatedPushButton("🌐 导出画廊")
         btn_export.clicked.connect(self.export_html_gallery)
-        self.btn_theme = QPushButton("🌙 护眼暗灰")
+        self.btn_theme = AnimatedPushButton("🌙 护眼暗灰")
         self.btn_theme.clicked.connect(self.toggle_theme)
-        btn_settings = QPushButton("⚙️ 设置")
+        btn_settings = AnimatedPushButton("⚙️ 设置")
         btn_settings.setToolTip("设置关闭窗口时的默认行为（最小化到托盘/退出程序）")
         btn_settings.clicked.connect(self.configure_close_action)
 
